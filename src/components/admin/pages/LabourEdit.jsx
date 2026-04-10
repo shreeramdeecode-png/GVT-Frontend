@@ -4,6 +4,15 @@ import { Camera, Calendar, ArrowLeft } from 'lucide-react';
 import { getLabourById, updateLabour } from '../../../api/labourApi';
 import { BASE_URL } from '../../../config/config';
 
+const normalizePhoneWithCountryCode = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('+')) return raw;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+91 ${digits}`;
+  return raw;
+};
+
 const EditLabour = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -51,7 +60,7 @@ const EditLabour = () => {
         setFormData({
           fullName: data.full_name,
           labourId: data.labour_id,
-          mobileNumber: data.mobile_number,
+          mobileNumber: normalizePhoneWithCountryCode(data.mobile_number),
           aadhaarNumber: data.aadhaar_number || '',
           dateOfBirth: data.date_of_birth,
           gender: data.gender,
@@ -230,9 +239,7 @@ const EditLabour = () => {
                       name="mobileNumber"
                       value={formData.mobileNumber}
                       onChange={handleInputChange}
-                      placeholder="Enter 10-digit mobile number"
-                      maxLength="10"
-                      pattern="[0-9]{10}"
+                      placeholder="+91 9876543210"
                       className="w-full px-4 py-2.5 bg-white border border-[#D0E0DB] rounded-lg text-[#0D5C4D] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#0D8568] focus:border-transparent"
                       required
                     />

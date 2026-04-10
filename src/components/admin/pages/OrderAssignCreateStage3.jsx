@@ -5,6 +5,7 @@ import { getPresentDriversToday } from '../../../api/driverApi';
 import { updateStage3Assignment } from '../../../api/orderAssignmentApi';
 import { getAllAirports } from '../../../api/airportApi';
 import InsufficientStockModal from '../../../components/common/InsufficientStockModal';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const OrderAssignCreateStage3 = () => {
   const navigate = useNavigate();
@@ -1285,7 +1286,7 @@ const OrderAssignCreateStage3 = () => {
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
                         >
                           <option value="">Select airport...</option>
-                          {airports.map((airport) => (
+                          {sortDropdownObjects(airports, (airport) => airport.name).map((airport) => (
                             <option key={airport.aid} value={airport.name}>
                               {airport.name}
                             </option>
@@ -1309,7 +1310,7 @@ const OrderAssignCreateStage3 = () => {
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
                         >
                           <option value="">Select driver...</option>
-                          {drivers.map(driver => (
+                          {sortDropdownObjects(drivers, (driver) => driver.driver_name).map(driver => (
                             <option key={driver.did} value={driver.did}>
                               {`${driver.driver_name} (${driver.driver_id || driver.did})`}
                             </option>
@@ -1491,9 +1492,9 @@ const OrderAssignCreateStage3 = () => {
                                     }
                                   }}
                                 >
-                                  <option value="pending">Pending</option>
-                                  <option value="ontrip">On Trip</option>
                                   <option value="completed">Completed</option>
+                                  <option value="ontrip">On Trip</option>
+                                  <option value="pending">Pending</option>
                                 </select>
                               </td>
                             </tr>
@@ -1538,7 +1539,7 @@ const OrderAssignCreateStage3 = () => {
                                                       }}
                                                     >
                                                       <option value="">Select tape...</option>
-                                                      {tapes.map(tape => (
+                                                      {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
                                                         <option key={tape.iid} value={tape.name}>{tape.name}</option>
                                                       ))}
                                                     </select>
@@ -1717,9 +1718,9 @@ const OrderAssignCreateStage3 = () => {
                                   }
                                 }}
                               >
-                                <option value="pending">Pending</option>
-                                <option value="ontrip">On Trip</option>
                                 <option value="completed">Completed</option>
+                                <option value="ontrip">On Trip</option>
+                                <option value="pending">Pending</option>
                               </select>
                             </div>
                           </div>
@@ -1766,7 +1767,7 @@ const OrderAssignCreateStage3 = () => {
                                                 }}
                                               >
                                                 <option value="">Select tape...</option>
-                                                {tapes.map(tape => (
+                                                {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
                                                   <option key={tape.iid} value={tape.name}>{tape.name}</option>
                                                 ))}
                                               </select>

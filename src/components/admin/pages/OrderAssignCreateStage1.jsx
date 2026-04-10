@@ -12,6 +12,7 @@ import { getPresentDriversToday } from '../../../api/driverApi';
 import { getAllProducts } from '../../../api/productApi';
 import { getAllProductCounts } from '../../../api/productCountApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
 
 const OrderAssignCreateStage1 = () => {
@@ -296,11 +297,11 @@ const OrderAssignCreateStage1 = () => {
         const drivers = driversRes.data?.map(record => record.driver).filter(d => d) || [];
 
         setAssignmentOptions({
-          farmers,
-          suppliers,
-          thirdParties,
-          labours,
-          drivers
+          farmers: sortDropdownObjects(farmers, (f) => f.farmer_name),
+          suppliers: sortDropdownObjects(suppliers, (s) => s.supplier_name),
+          thirdParties: sortDropdownObjects(thirdParties, (tp) => tp.third_party_name),
+          labours: sortDropdownObjects(labours, (l) => l.full_name),
+          drivers: sortDropdownObjects(drivers, (d) => d.driver_name)
         });
 
         try {
@@ -1148,16 +1149,16 @@ const OrderAssignCreateStage1 = () => {
                         }}
                       >
                         <option value="">Select name...</option>
-                        {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                        {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                           const availability = farmerAvailability[farmer.fid] || [];
                           return availability.some(item => item.vegetable_name === productName);
                         }).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                         ))}
-                        {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                        {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                           <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                         ))}
-                        {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                        {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                           <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                         ))}
                       </select>
@@ -1444,16 +1445,16 @@ const OrderAssignCreateStage1 = () => {
                       }}
                     >
                       <option value="">Select name...</option>
-                      {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                      {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                         const availability = farmerAvailability[farmer.fid] || [];
                         return availability.some(item => item.vegetable_name === productName);
                       }).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                       ))}
-                      {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                      {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                         <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                       ))}
-                      {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                      {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                         <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                       ))}
                     </select>
@@ -1701,8 +1702,8 @@ const OrderAssignCreateStage1 = () => {
                               setDeliveryRoutes(updatedRoutes);
                             }}
                           />
-                          <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                            {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => {
+                          <div className={`absolute z-20 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto ${index >= deliveryRoutes.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
+                            {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
                               const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
                               return (
                                 <label
@@ -1749,7 +1750,7 @@ const OrderAssignCreateStage1 = () => {
                       }}
                     >
                       <option value="">Select driver...</option>
-                      {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                      {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                         <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                           {driver.driver_name} - {driver.driver_id}
                         </option>
@@ -1842,8 +1843,8 @@ const OrderAssignCreateStage1 = () => {
                             setDeliveryRoutes(updatedRoutes);
                           }}
                         />
-                        <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                          {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => {
+                        <div className={`absolute z-20 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto ${index >= deliveryRoutes.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
+                          {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
                             const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
                             return (
                               <label
@@ -1892,7 +1893,7 @@ const OrderAssignCreateStage1 = () => {
                     }}
                   >
                     <option value="">Select driver...</option>
-                    {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                    {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                       <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                         {driver.driver_name} - {driver.driver_id}
                       </option>
@@ -1929,7 +1930,7 @@ const OrderAssignCreateStage1 = () => {
               const totalWeight = driverGroup.assignments.reduce((sum, a) => sum + parseFloat(a.quantity), 0);
 
               return (
-                <div key={groupIndex} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
+                <div key={groupIndex} className="bg-white rounded-lg shadow-sm overflow-visible border-2 border-emerald-300">
                   {/* Driver Header */}
                   <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
                     <div className="flex items-center gap-3 text-white">
@@ -2018,9 +2019,9 @@ const OrderAssignCreateStage1 = () => {
                                 onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [assignment.routeId]: e.target.value }))}
                               >
                                 <option value="">Select...</option>
+                                <option value="Completed">Completed</option>
                                 <option value="Drop">Drop</option>
                                 <option value="Picked and Packed">Picked and Packed</option>
-                                <option value="Completed">Completed</option>
                               </select>
                               {assignmentStatuses[assignment.routeId] === 'Drop' && (
                                 <div className="mt-2 space-y-2">
@@ -2039,7 +2040,7 @@ const OrderAssignCreateStage1 = () => {
                                       onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [`${assignment.routeId}-dropDriver`]: e.target.value }))}
                                     >
                                       <option value="">Select driver...</option>
-                                      {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                                      {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                                         <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                                           {driver.driver_name} - {driver.driver_id}
                                         </option>
@@ -2065,7 +2066,7 @@ const OrderAssignCreateStage1 = () => {
               const totalWeight = driverGroup.assignments.reduce((sum, a) => sum + parseFloat(a.quantity), 0);
 
               return (
-                <div key={groupIndex} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
+                <div key={groupIndex} className="bg-white rounded-lg shadow-sm overflow-visible border-2 border-emerald-300">
                   {/* Driver Header */}
                   <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3">
                     <div className="flex items-center gap-2 text-white">
@@ -2137,7 +2138,7 @@ const OrderAssignCreateStage1 = () => {
                                     onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [`${assignment.routeId}-dropDriver`]: e.target.value }))}
                                   >
                                     <option value="">Select driver...</option>
-                                    {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                                    {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                                       <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                                         {driver.driver_name} - {driver.driver_id}
                                       </option>

@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, X } from 'lucide-react';
 import { createVendor } from '../../../api/vendorApi';
 import { getAllProducts } from '../../../api/productApi';
 import { createNotification } from '../../../api/notificationApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const AddVendorForm = () => {
   const navigate = useNavigate();
@@ -533,7 +534,10 @@ const AddVendorForm = () => {
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0D7C66] focus:border-transparent text-sm appearance-none bg-white mb-3"
                 >
                   <option value="">Select items (Multiple selection)</option>
-                  {availableProducts.filter(product => !selectedProducts.includes(product.id)).map(product => (
+                  {sortDropdownObjects(
+                    availableProducts.filter(product => !selectedProducts.includes(product.id)),
+                    (product) => product.name
+                  ).map(product => (
                     <option key={product.id} value={product.id}>{product.name}</option>
                   ))}
                 </select>

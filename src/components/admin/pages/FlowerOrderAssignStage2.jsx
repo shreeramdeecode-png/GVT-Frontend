@@ -11,6 +11,7 @@ import { getAllThirdParties } from '../../../api/thirdPartyApi';
 import { getTapes } from '../../../api/inventoryApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const FlowerOrderAssignStage2 = () => {
   const navigate = useNavigate();
@@ -246,7 +247,7 @@ const FlowerOrderAssignStage2 = () => {
             );
           }
 
-          setLabours(presentLabours);
+          setLabours(sortDropdownObjects(presentLabours, (l) => l.full_name));
           
           // Initialize labour wages and total amounts
           const wages = {};
@@ -1409,9 +1410,9 @@ const FlowerOrderAssignStage2 = () => {
                                     }
                                   }}
                                 >
-                                  <option value="pending">Pending</option>
-                                  <option value="packing">Packing in Process</option>
                                   <option value="completed">Completed</option>
+                                  <option value="packing">Packing in Process</option>
+                                  <option value="pending">Pending</option>
                                 </select>
                               </td>
                             </tr>
@@ -1517,9 +1518,9 @@ const FlowerOrderAssignStage2 = () => {
                                   }
                                 }}
                               >
-                                <option value="pending">Pending</option>
-                                <option value="packing">Packing in Process</option>
                                 <option value="completed">Completed</option>
+                                <option value="packing">Packing in Process</option>
+                                <option value="pending">Pending</option>
                               </select>
                             </div>
                             <div className="pt-2">

@@ -12,6 +12,7 @@ import { getAllDrivers } from '../../../api/driverApi';
 import { getAllProducts } from '../../../api/productApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const OrderAssignCreateStage4 = () => {
     const navigate = useNavigate();
@@ -288,11 +289,11 @@ const OrderAssignCreateStage4 = () => {
                 const drivers = driversRes.data || [];
 
                 setAssignmentOptions({
-                    farmers,
-                    suppliers,
-                    thirdParties,
-                    labours,
-                    drivers
+                    farmers: sortDropdownObjects(farmers, (f) => f.farmer_name),
+                    suppliers: sortDropdownObjects(suppliers, (s) => s.supplier_name),
+                    thirdParties: sortDropdownObjects(thirdParties, (tp) => tp.third_party_name),
+                    labours: sortDropdownObjects(labours, (l) => l.full_name),
+                    drivers: sortDropdownObjects(drivers, (d) => d.driver_name)
                 });
 
                 try {
@@ -1053,8 +1054,8 @@ const OrderAssignCreateStage4 = () => {
                                 disabled
                                 className="appearance-none px-4 py-2 pr-10 bg-gray-100 border-2 border-gray-300 text-gray-600 rounded-lg font-medium cursor-not-allowed outline-none"
                             >
-                                <option value="Box">Box</option>
                                 <option value="Bag">Bag</option>
+                                <option value="Box">Box</option>
                             </select>
                             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-700 pointer-events-none" />
                         </div>

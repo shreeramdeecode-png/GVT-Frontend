@@ -5,6 +5,15 @@ import { getSupplierById, updateSupplier } from '../../../api/supplierApi';
 import { getAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 
+const normalizePhoneWithCountryCode = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('+')) return raw;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+91 ${digits}`;
+  return raw;
+};
+
 const EditSupplier = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -74,8 +83,8 @@ const EditSupplier = () => {
           contactPerson: supplier.contact_person || '',
           tapeColor: supplier.tape_color || '',
           dealingPerson: supplier.dealing_person || '',
-          primaryPhone: supplier.phone || '',
-          secondaryPhone: supplier.secondary_phone || '',
+          primaryPhone: normalizePhoneWithCountryCode(supplier.phone || ''),
+          secondaryPhone: normalizePhoneWithCountryCode(supplier.secondary_phone || ''),
           email: supplier.email || '',
           accountHolderName: supplier.account_holder_name || '',
           bankName: supplier.bank_name || '',

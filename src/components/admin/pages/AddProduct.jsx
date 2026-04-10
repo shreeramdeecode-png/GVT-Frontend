@@ -8,6 +8,7 @@ import { getAllCustomers } from '../../../api/customerApi';
 import { getPreferencesByCustomer, createPreference, updatePreference, deletePreference } from '../../../api/customerProductPreferenceApi';
 import { getAllProductCounts, updateProductCountStatus } from '../../../api/productCountApi';
 import { BASE_URL } from '../../../config/config';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const AddProduct = () => {
   const [activeTab, setActiveTab] = useState('product');
@@ -1839,7 +1840,7 @@ const AddProduct = () => {
                         <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
                         <select name="category_id" className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0D7C66] text-sm" required>
                           <option value="">Select Category</option>
-                          {categories.map(cat => (
+                          {sortDropdownObjects(categories, (cat) => cat.categoryname).map(cat => (
                             <option key={cat.cid} value={cat.cid}>{cat.categoryname}</option>
                           ))}
                         </select>
@@ -1872,7 +1873,7 @@ const AddProduct = () => {
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">Type of Packing</label>
                         <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
-                          {packingOptions.map((item) => (
+                          {sortDropdownObjects(packingOptions, (item) => item.name).map((item) => (
                             <label key={item.id} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
                               <input
                                 type="checkbox"
@@ -2025,7 +2026,7 @@ const AddProduct = () => {
                           Type of Packing
                         </label>
                         <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
-                          {packingOptions.map((item) => (
+                          {sortDropdownObjects(packingOptions, (item) => item.name).map((item) => (
                             <label
                               key={item.id}
                               className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
@@ -2229,7 +2230,7 @@ const AddProduct = () => {
                       Type of Packing
                     </label>
                     <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
-                      {packingOptions.map((item) => (
+                      {sortDropdownObjects(packingOptions, (item) => item.name).map((item) => (
                         <label
                           key={item.id}
                           className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
@@ -2394,7 +2395,7 @@ const AddProduct = () => {
                           required
                         >
                           <option value="">Select Category</option>
-                          {categories.map(cat => (
+                          {sortDropdownObjects(categories, (cat) => cat.categoryname).map(cat => (
                             <option key={cat.cid} value={cat.cid}>{cat.categoryname}</option>
                           ))}
                         </select>
@@ -2441,7 +2442,7 @@ const AddProduct = () => {
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">Type of Packing</label>
                         <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
-                          {packingOptions.map((item) => (
+                          {sortDropdownObjects(packingOptions, (item) => item.name).map((item) => (
                             <label key={item.id} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
                               <input
                                 type="checkbox"

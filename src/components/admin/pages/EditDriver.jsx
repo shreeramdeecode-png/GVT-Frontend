@@ -2,6 +2,34 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Upload, Eye, EyeOff, ChevronRight, ArrowLeft } from 'lucide-react';
 import { getDriverById, updateDriver } from '../../../api/driverApi';
+import { createNotification } from '../../../api/notificationApi';
+
+const normalizePhoneWithCountryCode = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('+')) return raw;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+91 ${digits}`;
+  return raw;
+};
+
+const EXPIRY_REMINDER_DAYS = 30;
+
+const toYMD = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+};
+
+const daysUntil = (value) => {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.ceil((d - now) / (1000 * 60 * 60 * 24));
+};
 
 const EditDriver = () => {
   const navigate = useNavigate();
@@ -28,6 +56,9 @@ const EditDriver = () => {
     capacity: '',
     insurance_number: '',
     insurance_expiry_date: '',
+    fitness_certificate_doc: '',
+    fitness_certificate: '',
+    fitness_certificate_expiry_date: '',
     vehicle_condition: 'Good',
     pollution_certificate: '',
     ka_permit: '',
@@ -49,6 +80,8 @@ const EditDriver = () => {
   const [driverIdProofPreview, setDriverIdProofPreview] = useState(null);
   const [insuranceDoc, setInsuranceDoc] = useState(null);
   const [insuranceDocPreview, setInsuranceDocPreview] = useState(null);
+  const [fitnessCertificateDoc, setFitnessCertificateDoc] = useState(null);
+  const [fitnessCertificateDocPreview, setFitnessCertificateDocPreview] = useState(null);
   const [pollutionDoc, setPollutionDoc] = useState(null);
   const [pollutionDocPreview, setPollutionDocPreview] = useState(null);
   const [kaPermitDoc, setKaPermitDoc] = useState(null);
@@ -62,6 +95,39 @@ const EditDriver = () => {
   ]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const createExpiryNotifications = async () => {
+    const vehicleNumber = (formData.vehicle_number || 'N/A').trim();
+    const docs = [
+      { label: 'Insurance', date: formData.insurance_expiry_date },
+      { label: 'Fitness Certificate', date: formData.fitness_certificate_expiry_date },
+      { label: 'Pollution Certificate', date: formData.pollution_certificate_expiry_date },
+      { label: 'Other State Permit', date: formData.ka_permit_expiry_date }
+    ];
+
+    for (const doc of docs) {
+      const ymd = toYMD(doc.date);
+      if (!ymd) continue;
+      const remaining = daysUntil(ymd);
+      if (remaining == null || remaining > EXPIRY_REMINDER_DAYS) continue;
+      const isOverdue = remaining < 0;
+      const absDays = Math.abs(remaining);
+      const timingText = isOverdue
+        ? `expired ${absDays} day${absDays === 1 ? '' : 's'} ago`
+        : `expires in ${remaining} day${remaining === 1 ? '' : 's'}`;
+
+      try {
+        await createNotification({
+          title: `${doc.label} renewal reminder - ${vehicleNumber}`,
+          message: `${doc.label} for vehicle ${vehicleNumber} (${formData.driver_name || 'Driver'}) ${timingText}. Due date: ${ymd}.`,
+          type: isOverdue ? 'error' : 'warning',
+          category: 'Drivers'
+        });
+      } catch (notifyError) {
+        console.error(`Failed to create ${doc.label} reminder notification:`, notifyError);
+      }
+    }
+  };
 
   useEffect(() => {
     const fetchDriverData = async () => {
@@ -92,7 +158,7 @@ const EditDriver = () => {
         setFormData({
           driver_id: driver.driver_id || driver.id || driver.did || driver._id || id || '',
           driver_name: driver.driver_name || driver.name || '',
-          phone_number: driver.phone_number || driver.phone || '',
+          phone_number: normalizePhoneWithCountryCode(driver.phone_number || driver.phone || ''),
           email: driver.email || '',
           address: driver.address || '',
           city: driver.city || '',
@@ -108,6 +174,9 @@ const EditDriver = () => {
           capacity: driver.capacity || '',
           insurance_number: driver.insurance_number || driver.insuranceNumber || '',
           insurance_expiry_date: driver.insurance_expiry_date || driver.insuranceExpiryDate || '',
+          fitness_certificate_doc: driver.fitness_certificate_doc || '',
+          fitness_certificate: driver.fitness_certificate || driver.fitnessCertificate || '',
+          fitness_certificate_expiry_date: driver.fitness_certificate_expiry_date || '',
           vehicle_condition: driver.vehicle_condition || driver.vehicleCondition || 'Good',
           pollution_certificate: driver.pollution_certificate || driver.pollutionCertificate || '',
           pollution_certificate_expiry_date: driver.pollution_certificate_expiry_date || '',
@@ -169,6 +238,9 @@ const EditDriver = () => {
         } else if (type === 'insurance') {
           setInsuranceDoc(file);
           setInsuranceDocPreview(reader.result);
+        } else if (type === 'fitnessCertificate') {
+          setFitnessCertificateDoc(file);
+          setFitnessCertificateDocPreview(reader.result);
         } else if (type === 'pollution') {
           setPollutionDoc(file);
           setPollutionDocPreview(reader.result);
@@ -197,10 +269,12 @@ const EditDriver = () => {
       if (driverImage) formDataToSend.append('license_image', driverImage);
       if (driverIdProof) formDataToSend.append('driver_id_proof', driverIdProof);
       if (insuranceDoc) formDataToSend.append('insurance_doc', insuranceDoc);
+      if (fitnessCertificateDoc) formDataToSend.append('fitness_certificate_doc', fitnessCertificateDoc);
       if (pollutionDoc) formDataToSend.append('pollution_doc', pollutionDoc);
       if (kaPermitDoc) formDataToSend.append('ka_permit_doc', kaPermitDoc);
       
       await updateDriver(id, formDataToSend);
+      await createExpiryNotifications();
       navigate(backPath);
     } catch (error) {
       console.error('Error updating driver:', error);
@@ -621,6 +695,58 @@ const EditDriver = () => {
                 {/* Upload Pollution Certificate Document */}
                 <div>
                   <label className="block text-sm text-gray-700 mb-2">
+                    Upload Fitness Certificate
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      <input
+                        type="file"
+                        id="fitnessCertificateDocUpload"
+                        onChange={(e) => handleFileUpload('fitnessCertificate', e)}
+                        accept=".jpg,.jpeg,.png,.gif,.pdf"
+                        className="hidden"
+                      />
+                      <label
+                        htmlFor="fitnessCertificateDocUpload"
+                        className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-200 transition-colors overflow-hidden"
+                      >
+                        {fitnessCertificateDocPreview ? (
+                          <img src={fitnessCertificateDocPreview} alt="Fitness Certificate" className="w-full h-full object-cover" />
+                        ) : formData.fitness_certificate_doc ? (
+                          <img
+                            src={`${import.meta.env.VITE_API_BASE_URL.replace('/api/v1', '')}${formData.fitness_certificate_doc}`}
+                            alt="Fitness Certificate"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Upload className="w-6 h-6 text-gray-600" />
+                        )}
+                      </label>
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => document.getElementById('fitnessCertificateDocUpload').click()}
+                        className="px-6 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Upload File
+                      </button>
+                      {fitnessCertificateDoc ? (
+                        <p className="text-xs text-green-600 mt-2 font-medium">
+                          ✓ {fitnessCertificateDoc.name}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Upload fitness certificate: JPG, PNG, GIF or PDF. Max 5MB.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Upload Pollution Certificate Document */}
+                <div>
+                  <label className="block text-sm text-gray-700 mb-2">
                     Upload Pollution Certificate
                   </label>
                   <div className="flex items-center gap-4">
@@ -857,6 +983,34 @@ const EditDriver = () => {
                     </select>
                     <ChevronRight className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none rotate-90" />
                   </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    Fitness Certificate 
+                  </label>
+                  <input
+                    type="text"
+                    name="fitness_certificate"
+                    value={formData.fitness_certificate}
+                    onChange={handleInputChange}
+                    placeholder="Enter fitness certificate number"
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    Fitness Certificate Expiry Date 
+                  </label>
+                  <input
+                    type="date"
+                    name="fitness_certificate_expiry_date"
+                    value={formData.fitness_certificate_expiry_date}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                  />
                 </div>
               </div>
 

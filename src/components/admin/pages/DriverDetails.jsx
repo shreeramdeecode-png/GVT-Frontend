@@ -39,6 +39,8 @@ const DriverDetailsPage = () => {
             condition: driver.vehicle_condition,
             insuranceNumber: driver.insurance_number,
             insuranceExpiry: driver.insurance_expiry_date,
+            fitnessCertificate: driver.fitness_certificate,
+            fitnessCertificateExpiry: driver.fitness_certificate_expiry_date,
             pollutionCert: driver.pollution_certificate,
             pollutionCertExpiry: driver.pollution_certificate_expiry_date,
             kaPermit: driver.ka_permit,
@@ -97,7 +99,7 @@ const DriverDetailsPage = () => {
             Driver Details
           </button>
           <button
-            onClick={() => navigate('/start-end-km-management', { state: { driverId: id } })}
+            onClick={() => navigate(`/start-end-km-management?driverId=${id}`, { state: { driverId: id } })}
             className="px-6 py-2.5 rounded-lg font-medium transition-all text-sm whitespace-nowrap bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
           >
             Start KM/End KM
@@ -303,6 +305,14 @@ const DriverDetailsPage = () => {
                 <div>
                   <label className="block text-sm text-gray-500 mb-1">Vehicle Condition</label>
                   <div className="text-sm font-medium text-gray-900">{driverInfo.vehicle.condition || 'N/A'}</div>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Fitness Certificate</label>
+                  <div className="text-sm font-medium text-gray-900">{driverInfo.vehicle.fitnessCertificate || 'N/A'}</div>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Fitness Certificate Expiry</label>
+                  <div className="text-sm font-medium text-gray-900">{driverInfo.vehicle.fitnessCertificateExpiry || 'N/A'}</div>
                 </div>
                 <div>
                   <label className="block text-sm text-gray-500 mb-1">Pollution Certificate</label>

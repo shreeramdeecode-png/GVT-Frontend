@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, X } from 'lucide-react';
 import { createFarmer } from '../../../api/farmerApi';
 import { getAllProducts } from '../../../api/productApi';
 import { createNotification } from '../../../api/notificationApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const AddFarmer = () => {
   const navigate = useNavigate();
@@ -26,7 +27,7 @@ const AddFarmer = () => {
     branch_name: '',
     account_number: '',
     IFSC_code: '',
-    status: 'active'
+    status: ''
   });
 
   const [selectedVegetables, setSelectedVegetables] = useState([]);
@@ -445,7 +446,7 @@ const AddFarmer = () => {
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0D7C66] focus:border-transparent text-sm appearance-none bg-white mb-3"
               >
                 <option value="">Select items (Multiple selection)</option>
-                {availableVegetables.filter(veg => !selectedVegetables.includes(veg.id)).map(veg => (
+                {sortDropdownObjects(availableVegetables, (veg) => veg.name).filter(veg => !selectedVegetables.includes(veg.id)).map(veg => (
                   <option key={veg.id} value={veg.id}>{veg.name}</option>
                 ))}
               </select>

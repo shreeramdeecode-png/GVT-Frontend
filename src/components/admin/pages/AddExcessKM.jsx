@@ -64,9 +64,18 @@ const AddExcessKM = () => {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    let nextValue = value;
+    if (name === 'start_km' || name === 'end_km') {
+      if (value === '') {
+        nextValue = '';
+      } else {
+        const n = parseFloat(value);
+        nextValue = Number.isNaN(n) ? '' : String(Math.max(n, 0));
+      }
+    }
     setKmData(prev => ({
       ...prev,
-      [name]: value
+      [name]: nextValue
     }));
   };
 
@@ -80,6 +89,10 @@ const AddExcessKM = () => {
 
     const startKm = parseFloat(kmData.start_km);
     const endKm = parseFloat(kmData.end_km);
+    if (startKm < 0 || endKm < 0) {
+      toast.error('Start KM and End KM cannot be negative');
+      return;
+    }
 
     if (endKm <= startKm) {
       toast.error('End KM must be greater than Start KM');
@@ -179,6 +192,7 @@ const AddExcessKM = () => {
               </label>
               <input
                 type="text"
+                min="0"
                 name="start_km"
                 value={kmData.start_km}
                 onChange={handleInputChange}
@@ -194,6 +208,7 @@ const AddExcessKM = () => {
               </label>
               <input
                 type="text"
+                min="0"
                 name="end_km"
                 value={kmData.end_km}
                 onChange={handleInputChange}

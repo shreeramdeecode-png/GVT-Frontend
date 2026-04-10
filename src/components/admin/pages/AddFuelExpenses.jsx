@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { createFuelExpense } from '../../../api/fuelExpenseApi';
 import { getDriverById, getAllDrivers } from '../../../api/driverApi';
 import { petrolBulkApi } from '../../../api/petrolBulkApi';
+import { sortDropdownObjects, sortDropdownStrings } from '../../../utils/dropdownSort';
 
 const AddFuelExpenses = () => {
   const navigate = useNavigate();
@@ -136,7 +137,7 @@ const AddFuelExpenses = () => {
                 required
               >
                 <option value="">Select Vehicle</option>
-                {vehicles.map((vehicle, index) => (
+                {sortDropdownStrings(vehicles).map((vehicle, index) => (
                   <option key={index} value={vehicle}>
                     {vehicle}
                   </option>
@@ -151,8 +152,8 @@ const AddFuelExpenses = () => {
                 onChange={(e) => setExpenseData({ ...expenseData, fuel_type: e.target.value })}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               >
-                <option value="Petrol">Petrol</option>
                 <option value="Diesel">Diesel</option>
+                <option value="Petrol">Petrol</option>
               </select>
             </div>
 
@@ -165,7 +166,7 @@ const AddFuelExpenses = () => {
                 required
               >
                 <option value="">Select Petrol Bunk</option>
-                {petrolBunks.map((bunk) => (
+                {sortDropdownObjects(petrolBunks, (bunk) => bunk.name).map((bunk) => (
                   <option key={bunk.pbid || bunk.id} value={bunk.name}>
                     {bunk.name}
                   </option>

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Calendar, ChevronDown } from 'lucide-react';
 import { createLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllLabours } from '../../../api/labourApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const AddLabourExcessPay = () => {
   const navigate = useNavigate();
@@ -117,7 +118,7 @@ const AddLabourExcessPay = () => {
                   required
                 >
                   <option value="">Select labour</option>
-                  {labours.map(labour => (
+                  {sortDropdownObjects(labours, (labour) => labour.full_name).map(labour => (
                     <option key={labour.lid} value={labour.lid}>
                       {labour.full_name}
                     </option>

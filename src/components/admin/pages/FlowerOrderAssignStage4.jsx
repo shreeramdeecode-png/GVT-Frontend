@@ -13,6 +13,7 @@ import { getAllDrivers } from '../../../api/driverApi';
 import { getAllProducts } from '../../../api/productApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const FlowerOrderAssignStage4 = () => {
     const navigate = useNavigate();
@@ -289,11 +290,11 @@ const FlowerOrderAssignStage4 = () => {
                 const drivers = driversRes.data || [];
 
                 setAssignmentOptions({
-                    farmers,
-                    suppliers,
-                    thirdParties,
-                    labours,
-                    drivers
+                    farmers: sortDropdownObjects(farmers, (f) => f.farmer_name),
+                    suppliers: sortDropdownObjects(suppliers, (s) => s.supplier_name),
+                    thirdParties: sortDropdownObjects(thirdParties, (tp) => tp.third_party_name),
+                    labours: sortDropdownObjects(labours, (l) => l.full_name),
+                    drivers: sortDropdownObjects(drivers, (d) => d.driver_name)
                 });
 
                 try {

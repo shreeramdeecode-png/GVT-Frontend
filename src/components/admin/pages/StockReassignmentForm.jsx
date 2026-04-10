@@ -156,9 +156,9 @@ const StockReassignmentForm = () => {
                 className="appearance-none w-full px-4 py-3 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white cursor-pointer"
               >
                 <option value="">Select farmer from list...</option>
-                <option value="farmer1">Raju Farms - Village Road, Dist-40km</option>
-                <option value="farmer2">Krishna Farms - Highway 45</option>
                 <option value="farmer3">Gopal Agriculture - Rural Area</option>
+                <option value="farmer2">Krishna Farms - Highway 45</option>
+                <option value="farmer1">Raju Farms - Village Road, Dist-40km</option>
               </select>
               <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
             </div>
@@ -214,9 +214,9 @@ const StockReassignmentForm = () => {
                 <select
                   className="appearance-none w-full px-4 py-3 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white cursor-pointer"
                 >
-                  <option>Raju Farms - Village Road, Dist-40km</option>
                   <option>Central Collection Point</option>
                   <option>Highway Junction</option>
+                  <option>Raju Farms - Village Road, Dist-40km</option>
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
               </div>
@@ -310,9 +310,9 @@ const StockReassignmentForm = () => {
                   onChange={(e) => setTapeType(e.target.value)}
                   className="appearance-none w-full px-4 py-3 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white cursor-pointer"
                 >
-                  <option>SINGLE FARMER</option>
-                  <option>MULTI FARMER</option>
                   <option>MIXED SOURCE</option>
+                  <option>MULTI FARMER</option>
+                  <option>SINGLE FARMER</option>
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
               </div>
@@ -329,8 +329,8 @@ const StockReassignmentForm = () => {
                   onChange={(e) => setLabourAssignment(e.target.value)}
                   className="appearance-none w-full px-4 py-3 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white cursor-pointer"
                 >
-                  <option>Mahes 👤</option>
                   <option>Kumar 👤</option>
+                  <option>Mahes 👤</option>
                   <option>Ravi 👤</option>
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />

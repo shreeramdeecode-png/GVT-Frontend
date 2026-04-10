@@ -13,6 +13,7 @@ import { getAllCompanies } from '../../../api/inventoryCompanyApi';
 import { createSellStock, getAllSellStocks, deleteSellStock } from '../../../api/sellStockApi';
 import { createNotification, getNotifications } from '../../../api/notificationApi';
 import { BASE_URL } from '../../../config/config';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const StockManagement = () => {
   const navigate = useNavigate();
@@ -1585,12 +1586,12 @@ const StockManagement = () => {
                       <option value="">
                         Select {sellForm.entityType === 'supplier' ? 'Supplier' : 'Third Party'}
                       </option>
-                      {sellForm.entityType === 'supplier' && suppliers.map((supplier) => (
+                      {sellForm.entityType === 'supplier' && sortDropdownObjects(suppliers, (supplier) => supplier.supplier_name).map((supplier) => (
                         <option key={supplier.sid} value={supplier.sid}>
                           {supplier.supplier_name} - {supplier.phone}
                         </option>
                       ))}
-                      {sellForm.entityType === 'thirdParty' && thirdParties.map((thirdParty) => (
+                      {sellForm.entityType === 'thirdParty' && sortDropdownObjects(thirdParties, (thirdParty) => thirdParty.third_party_name).map((thirdParty) => (
                         <option key={thirdParty.tid} value={thirdParty.tid}>
                           {thirdParty.third_party_name} - {thirdParty.phone}
                         </option>
@@ -1610,7 +1611,7 @@ const StockManagement = () => {
                     className="w-full px-4 py-3 bg-[#F0F4F3] border border-[#D0E0DB] rounded-xl text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568]"
                   >
                     <option value="">Select Driver</option>
-                    {drivers.map((driver) => (
+                    {sortDropdownObjects(drivers, (driver) => driver.driver_name).map((driver) => (
                       <option key={driver.did} value={driver.did}>
                         {driver.driver_name} - {driver.phone_number}
                       </option>
@@ -1640,7 +1641,7 @@ const StockManagement = () => {
                     {openSellDropdown === 'labour' && (
                       <div className="absolute z-50 mt-1 w-full bg-white border border-[#D0E0DB] rounded-xl shadow-lg max-h-60 overflow-y-auto">
                         {labours.length > 0 ? (
-                          labours.map((labour) => {
+                          sortDropdownObjects(labours, (labour) => labour.full_name).map((labour) => {
                             const labourId = String(labour.lid);
                             const isSelected = (sellForm.selectedLabours || []).includes(labourId);
 
@@ -2044,7 +2045,7 @@ const StockManagement = () => {
                       required
                     >
                       <option value="">Select company</option>
-                      {inventoryCompanies.map((company) => (
+                      {sortDropdownObjects(inventoryCompanies, (company) => company.name).map((company) => (
                         <option key={company.id} value={company.id}>
                           {company.name}
                         </option>
@@ -2098,7 +2099,7 @@ const StockManagement = () => {
                                 required
                               >
                                 <option value="">Select item</option>
-                                {inventoryProducts.map((product) => (
+                                {sortDropdownObjects(inventoryProducts, (product) => product.name).map((product) => (
                                   <option key={product.id} value={product.id}>
                                     {product.name}
                                   </option>

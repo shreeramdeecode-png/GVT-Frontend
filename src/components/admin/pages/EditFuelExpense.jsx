@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { getFuelExpenseById, updateFuelExpense } from '../../../api/fuelExpenseApi';
 import { getAllDrivers, getDriverById } from '../../../api/driverApi';
+import { sortDropdownStrings } from '../../../utils/dropdownSort';
 
 const EditFuelExpense = () => {
   const navigate = useNavigate();
@@ -129,7 +130,7 @@ const EditFuelExpense = () => {
                     required
                   >
                     <option value="">Select Vehicle</option>
-                    {vehicles.map((vehicle, index) => (
+                    {sortDropdownStrings(vehicles).map((vehicle, index) => (
                       <option key={index} value={vehicle}>
                         {vehicle}
                       </option>
@@ -143,8 +144,8 @@ const EditFuelExpense = () => {
                     onChange={(e) => setFormData({ ...formData, fuel_type: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                   >
-                    <option value="Petrol">Petrol</option>
                     <option value="Diesel">Diesel</option>
+                    <option value="Petrol">Petrol</option>
                   </select>
                 </div>
                 <div>

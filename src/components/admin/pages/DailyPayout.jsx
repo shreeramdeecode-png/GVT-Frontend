@@ -152,8 +152,8 @@ const DailyPayout = () => {
         const dateStr = toDateStr(km.date);
         if (!dateStr) return;
 
-        const startKm = parseFloat(km.start_km ?? km.startKm ?? 0) || 0;
-        const endKm = parseFloat(km.end_km ?? km.endKm ?? 0) || 0;
+        const startKm = Math.max(parseFloat(km.start_km ?? km.startKm ?? 0) || 0, 0);
+        const endKm = Math.max(parseFloat(km.end_km ?? km.endKm ?? 0) || 0, 0);
         const amt = parseFloat(km.amount || 0) || 0;
         const recordId = km.id ?? km.ekmid ?? km.excess_km_id;
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { updateInventory, deleteInventory } from '../../../api/inventoryApi';
 import { getAllCompanies } from '../../../api/inventoryCompanyApi';
+import { sortDropdownStrings } from '../../../utils/dropdownSort';
 
 const EditInventory = ({ item, onClose, onUpdate, onDelete }) => {
   const [formData, setFormData] = useState({
@@ -153,7 +154,7 @@ const EditInventory = ({ item, onClose, onUpdate, onDelete }) => {
                   className={`w-full px-4 py-2.5 border ${errors.category ? 'border-red-500' : 'border-gray-300'
                     } rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm appearance-none bg-white cursor-pointer text-gray-900`}
                 >
-                  {categories.map(cat => (
+                  {sortDropdownStrings(categories).map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
@@ -229,7 +230,7 @@ const EditInventory = ({ item, onClose, onUpdate, onDelete }) => {
                       className={`w-full px-4 py-2.5 border ${errors.unit ? 'border-red-500' : 'border-gray-300'
                         } rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm appearance-none bg-white cursor-pointer text-gray-900`}
                     >
-                      {units.map(unit => (
+                      {sortDropdownStrings(units).map(unit => (
                         <option key={unit} value={unit}>{unit}</option>
                       ))}
                     </select>

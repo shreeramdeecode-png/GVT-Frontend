@@ -234,8 +234,8 @@ const AttendanceEdit = () => {
             className="appearance-none bg-white border border-[#D0E0DB] rounded-lg px-4 py-2.5 pr-10 text-sm text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer min-w-[140px]"
           >
             <option value="All">Status: All</option>
-            <option value="Present">Present</option>
             <option value="Absent">Absent</option>
+            <option value="Present">Present</option>
           </select>
           <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[#6B8782] pointer-events-none" size={16} />
         </div>
@@ -246,9 +246,9 @@ const AttendanceEdit = () => {
             className="appearance-none bg-white border border-[#D0E0DB] rounded-lg px-4 py-2.5 pr-10 text-sm text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer min-w-[160px]"
           >
             <option value="All">Delivery Type: All</option>
-            <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
             <option value="BOX ORDER">BOX ORDER</option>
             <option value="Both Types">Both Types</option>
+            <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
           </select>
           <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[#6B8782] pointer-events-none" size={16} />
         </div>

@@ -293,6 +293,8 @@ const DriverManagement = () => {
           'VEHICLE CONDITION': driver.vehicle_condition || 'N/A',
           'INSURANCE NUMBER': driver.insurance_number || 'N/A',
           'INSURANCE EXPIRY': driver.insurance_expiry_date || 'N/A',
+          'FITNESS CERTIFICATE': driver.fitness_certificate || 'N/A',
+          'FITNESS CERTIFICATE EXPIRY': driver.fitness_certificate_expiry_date || 'N/A',
           'POLLUTION CERT': driver.pollution_certificate || 'N/A',
           'POLLUTION CERT EXPIRY': driver.pollution_certificate_expiry_date || 'N/A',
           'KA PERMIT': driver.ka_permit || 'N/A',
@@ -332,6 +334,8 @@ const DriverManagement = () => {
         { wch: 18 }, // VEHICLE CONDITION
         { wch: 20 }, // INSURANCE NUMBER
         { wch: 18 }, // INSURANCE EXPIRY
+        { wch: 22 }, // FITNESS CERTIFICATE
+        { wch: 26 }, // FITNESS CERTIFICATE EXPIRY
         { wch: 18 }, // POLLUTION CERT
         { wch: 22 }, // POLLUTION CERT EXPIRY
         { wch: 15 }, // KA PERMIT
@@ -576,8 +580,8 @@ const DriverManagement = () => {
                       className="w-full px-4 py-3 border border-[#D0E0DB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0D8568] focus:border-transparent appearance-none bg-white text-sm font-medium text-[#0D5C4D] cursor-pointer"
                     >
                       <option>All</option>
-                      <option>Present</option>
                       <option>Absent</option>
+                      <option>Present</option>
                     </select>
                     <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-[#6B8782] pointer-events-none" />
                   </div>

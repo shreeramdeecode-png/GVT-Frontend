@@ -181,9 +181,9 @@ const AddCustomers = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white"
                 >
                   <option value="">Select category</option>
-                  <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
                   <option value="BOX ORDER">BOX ORDER</option>
                   <option value="FLOWER ORDER">FLOWER ORDER</option>
+                  <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
                 </select>
               </div>
               <div className="flex gap-3 pt-4">
@@ -228,9 +228,9 @@ const AddCustomers = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white"
                 >
                   <option value="">Select category</option>
-                  <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
                   <option value="BOX ORDER">BOX ORDER</option>
                   <option value="FLOWER ORDER">FLOWER ORDER</option>
+                  <option value="LOCAL GRADE ORDER">LOCAL GRADE ORDER</option>
                 </select>
               </div>
               <div className="flex gap-3 pt-4">

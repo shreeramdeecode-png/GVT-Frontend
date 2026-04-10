@@ -268,10 +268,10 @@ const OrdersList = () => {
               className="appearance-none px-4 py-2.5 pr-10 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#0D7C66] focus:border-transparent cursor-pointer min-w-[140px]"
             >
               <option>All Time</option>
-              <option>Today</option>
-              <option>This Week</option>
-              <option>This Month</option>
               <option>Last Month</option>
+              <option>This Month</option>
+              <option>This Week</option>
+              <option>Today</option>
             </select>
             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
           </div>
@@ -284,10 +284,10 @@ const OrdersList = () => {
               className="appearance-none px-4 py-2.5 pr-10 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#0D7C66] focus:border-transparent cursor-pointer min-w-[140px]"
             >
               <option>All Status</option>
+              <option>Cancelled</option>
               <option>Delivered</option>
               <option>In Transit</option>
               <option>Processing</option>
-              <option>Cancelled</option>
             </select>
             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
           </div>

@@ -12,6 +12,7 @@ import { getAllProducts } from '../../../api/productApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
 import { createOrUpdatePreOrder } from '../../../api/preOrderApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const PreOrder = () => {
   const navigate = useNavigate();
@@ -687,16 +688,16 @@ const PreOrder = () => {
                         }}
                       >
                         <option value="">Select name...</option>
-                        {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                        {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                           const availability = farmerAvailability[farmer.fid] || [];
                           return availability.some(item => item.vegetable_name === productName);
                         }).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                         ))}
-                        {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                        {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                           <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                         ))}
-                        {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                        {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                           <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                         ))}
                       </select>
@@ -956,16 +957,16 @@ const PreOrder = () => {
                       }}
                     >
                       <option value="">Select name...</option>
-                      {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                      {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                         const availability = farmerAvailability[farmer.fid] || [];
                         return availability.some(item => item.vegetable_name === productName);
                       }).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                       ))}
-                      {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                      {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                         <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                       ))}
-                      {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                      {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                         <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                       ))}
                     </select>
@@ -1144,7 +1145,7 @@ const PreOrder = () => {
                       }}
                     >
                       <option value="">Select driver...</option>
-                      {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                      {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                         <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                           {driver.driver_name} - {driver.driver_id}
                         </option>
@@ -1210,7 +1211,7 @@ const PreOrder = () => {
                     }}
                   >
                     <option value="">Select driver...</option>
-                    {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                    {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                       <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                         {driver.driver_name} - {driver.driver_id}
                       </option>
@@ -1319,9 +1320,9 @@ const PreOrder = () => {
                                 value={assignmentStatuses[assignment.routeId] || 'pending'}
                                 onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [assignment.routeId]: e.target.value }))}
                               >
+                                <option value="completed">Completed</option>
                                 <option value="pending">Pending</option>
                                 <option value="picked">Picked</option>
-                                <option value="completed">Completed</option>
                               </select>
                             </td>
                           </tr>
@@ -1402,9 +1403,9 @@ const PreOrder = () => {
                               value={assignmentStatuses[assignment.routeId] || 'pending'}
                               onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [assignment.routeId]: e.target.value }))}
                             >
+                              <option value="completed">Completed</option>
                               <option value="pending">Pending</option>
                               <option value="picked">Picked</option>
-                              <option value="completed">Completed</option>
                             </select>
                           </div>
                         </div>

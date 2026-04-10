@@ -12,6 +12,13 @@ const DriverLocalPickups = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [startKm, setStartKm] = useState('');
   const [endKm, setEndKm] = useState('');
+
+  const sanitizeNonNegativeKm = (value) => {
+    if (value === '') return '';
+    const num = parseFloat(value);
+    if (Number.isNaN(num)) return '';
+    return num < 0 ? '0' : value;
+  };
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -194,7 +201,7 @@ const DriverLocalPickups = () => {
   };
 
   const handleStartSubmit = () => {
-    if (!startKm) return;
+    if (!startKm || (parseFloat(startKm) || 0) < 0) return;
     handleStatusChange(selectedOrder.id, 'In Transit');
     setShowStartModal(false);
     setStartKm('');
@@ -207,7 +214,7 @@ const DriverLocalPickups = () => {
   };
 
   const handleEndKmSubmit = () => {
-    if (!endKm) return;
+    if (!endKm || (parseFloat(endKm) || 0) < 0) return;
     handleStatusChange(selectedOrder.id, 'Completed');
     setShowEndKmModal(false);
     setEndKm('');
@@ -533,8 +540,9 @@ const DriverLocalPickups = () => {
               <div className="flex gap-2">
                 <input
                   type="number"
+                  min="0"
                   value={startKm}
-                  onChange={(e) => setStartKm(e.target.value)}
+                  onChange={(e) => setStartKm(sanitizeNonNegativeKm(e.target.value))}
                   placeholder="Enter kilometer"
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -574,8 +582,9 @@ const DriverLocalPickups = () => {
               <div className="flex gap-2">
                 <input
                   type="number"
+                  min="0"
                   value={endKm}
-                  onChange={(e) => setEndKm(e.target.value)}
+                  onChange={(e) => setEndKm(sanitizeNonNegativeKm(e.target.value))}
                   placeholder="Enter kilometer"
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />

@@ -15,6 +15,12 @@ const DriverAirportDeliveryPage = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [startKm, setStartKm] = useState('');
   const [endKm, setEndKm] = useState('');
+  const sanitizeNonNegativeKm = (value) => {
+    if (value === '') return '';
+    const num = parseFloat(value);
+    if (Number.isNaN(num)) return '';
+    return num < 0 ? '0' : value;
+  };
   const [expenseData, setExpenseData] = useState({
     fuelType: 'Petrol',
     petrolBunkName: 'Indian Oil Petroleum',
@@ -201,7 +207,7 @@ const DriverAirportDeliveryPage = () => {
   };
 
   const handleStartSubmit = () => {
-    if (!startKm) return;
+    if (!startKm || (parseFloat(startKm) || 0) < 0) return;
     handleStatusChange(selectedOrder.id, 'In Transit');
     setShowStartModal(false);
     setStartKm('');
@@ -227,7 +233,7 @@ const DriverAirportDeliveryPage = () => {
   };
 
   const handleEndKmSubmit = () => {
-    if (!endKm) return;
+    if (!endKm || (parseFloat(endKm) || 0) < 0) return;
     handleStatusChange(selectedOrder.id, 'Completed');
     setShowEndKmModal(false);
     setEndKm('');
@@ -558,8 +564,9 @@ const DriverAirportDeliveryPage = () => {
               <div className="flex gap-2">
                 <input
                   type="number"
+                  min="0"
                   value={startKm}
-                  onChange={(e) => setStartKm(e.target.value)}
+                  onChange={(e) => setStartKm(sanitizeNonNegativeKm(e.target.value))}
                   placeholder="Enter kilometer"
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -599,8 +606,9 @@ const DriverAirportDeliveryPage = () => {
               <div className="flex gap-2">
                 <input
                   type="number"
+                  min="0"
                   value={endKm}
-                  onChange={(e) => setEndKm(e.target.value)}
+                  onChange={(e) => setEndKm(sanitizeNonNegativeKm(e.target.value))}
                   placeholder="Enter kilometer"
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -643,8 +651,8 @@ const DriverAirportDeliveryPage = () => {
                   onChange={(e) => setExpenseData({ ...expenseData, fuelType: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 >
-                  <option value="Petrol">Petrol</option>
                   <option value="Diesel">Diesel</option>
+                  <option value="Petrol">Petrol</option>
                 </select>
               </div>
               <div>
@@ -654,8 +662,8 @@ const DriverAirportDeliveryPage = () => {
                   onChange={(e) => setExpenseData({ ...expenseData, petrolBunkName: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
                 >
-                  <option value="Indian Oil Petroleum">Indian Oil Petroleum</option>
                   <option value="Bharat Petroleum">Bharat Petroleum</option>
+                  <option value="Indian Oil Petroleum">Indian Oil Petroleum</option>
                 </select>
               </div>
               <div>

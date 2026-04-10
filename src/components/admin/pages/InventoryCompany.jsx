@@ -631,8 +631,8 @@ const InventoryCompany = () => {
                                         className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                                         required
                                     >
-                                        <option value="unpaid">Unpaid</option>
                                         <option value="paid">Paid</option>
+                                        <option value="unpaid">Unpaid</option>
                                     </select>
                                 </div>
                                 <div className="flex gap-3">

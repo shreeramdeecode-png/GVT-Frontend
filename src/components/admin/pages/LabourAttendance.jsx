@@ -278,8 +278,8 @@ const LabourAttendance = () => {
             className="appearance-none bg-white border border-[#D0E0DB] rounded-lg px-4 py-2.5 pr-10 text-sm text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer min-w-[140px]"
           >
             <option value="All">Status: All</option>
-            <option value="Present">Present</option>
             <option value="Absent">Absent</option>
+            <option value="Present">Present</option>
           </select>
           <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[#6B8782] pointer-events-none" size={16} />
         </div>
@@ -429,10 +429,10 @@ const LabourAttendance = () => {
                         >
                           <option value="" disabled>Absent</option>
                           <option value="informed leave">Informed Leave</option>
-                          <option value="uninformed leave">Uninformed Leave</option>
                           <option value="leave">Leave</option>
-                          <option value="voluntary leave">Voluntary Leave</option>
                           <option value="normal absent">Normal Absent</option>
+                          <option value="uninformed leave">Uninformed Leave</option>
+                          <option value="voluntary leave">Voluntary Leave</option>
                         </select>
                         <ChevronDown className={`absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none ${labour.status === 'Present' || ABSENT_STATUSES.includes(labour.status) || !!labour.checkOut
                           ? 'text-gray-400'

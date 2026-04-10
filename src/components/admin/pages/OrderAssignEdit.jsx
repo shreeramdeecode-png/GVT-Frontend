@@ -8,6 +8,7 @@ import { getAllSuppliers } from '../../../api/supplierApi';
 import { getAllThirdParties } from '../../../api/thirdPartyApi';
 import { getAllLabours } from '../../../api/labourApi';
 import { getAllDrivers } from '../../../api/driverApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const OrderAssignEdit = () => {
   const navigate = useNavigate();
@@ -233,8 +234,8 @@ const OrderAssignEdit = () => {
               onChange={(e) => setSelectedType(e.target.value)}
               className="appearance-none px-4 py-2 pr-10 bg-white border-2 border-emerald-600 text-emerald-700 rounded-lg font-medium cursor-pointer hover:bg-emerald-50 transition-colors outline-none"
             >
-              <option value="Box">Box</option>
               <option value="Bag">Bag</option>
+              <option value="Box">Box</option>
             </select>
             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-700 pointer-events-none" />
           </div>
@@ -289,13 +290,13 @@ const OrderAssignEdit = () => {
                           }}
                         >
                           <option value="">Select {row.entityType}...</option>
-                          {row.entityType === 'farmer' && assignmentOptions.farmers.map(f => (
+                          {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (f) => f.farmer_name).map(f => (
                             <option key={f.fid} value={f.farmer_name}>{f.farmer_name}</option>
                           ))}
-                          {row.entityType === 'supplier' && assignmentOptions.suppliers.map(s => (
+                          {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (s) => s.supplier_name).map(s => (
                             <option key={s.sid} value={s.supplier_name}>{s.supplier_name}</option>
                           ))}
-                          {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(tp => (
+                          {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (tp) => tp.third_party_name).map(tp => (
                             <option key={tp.tpid} value={tp.third_party_name}>{tp.third_party_name}</option>
                           ))}
                         </select>
@@ -353,9 +354,9 @@ const OrderAssignEdit = () => {
               onChange={(e) => setPackagingStatus(e.target.value)}
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm"
             >
-              <option>Quality Check Completed</option>
               <option>In Progress</option>
               <option>Pending</option>
+              <option>Quality Check Completed</option>
             </select>
           </div>
           <div>
@@ -366,7 +367,7 @@ const OrderAssignEdit = () => {
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm"
             >
               <option value="">Select Labour</option>
-              {assignmentOptions.labours.map(labour => (
+              {sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => (
                 <option key={labour.lid} value={labour.lid}>{labour.full_name}</option>
               ))}
             </select>
@@ -426,7 +427,7 @@ const OrderAssignEdit = () => {
             className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm"
           >
             <option value="">Select a driver</option>
-            {assignmentOptions.drivers.map(driver => (
+            {sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
               <option key={driver.did} value={driver.did}>
                 {driver.driver_name} - {driver.driver_id}
               </option>

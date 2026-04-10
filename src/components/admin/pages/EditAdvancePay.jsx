@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { getAdvancePayById, updateAdvancePay } from '../../../api/advancePayApi';
 import { getAllDrivers } from '../../../api/driverApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const EditAdvancePay = () => {
   const navigate = useNavigate();
@@ -91,7 +92,7 @@ const EditAdvancePay = () => {
                     required
                   >
                     <option value="">Select Driver</option>
-                    {drivers.map(driver => (
+                    {sortDropdownObjects(drivers, (driver) => driver.driver_name).map(driver => (
                       <option key={driver.did} value={driver.did}>
                         {driver.driver_name} ({driver.driver_id})
                       </option>

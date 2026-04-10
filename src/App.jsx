@@ -41,6 +41,8 @@ import DriverLocalPickups from './components/admin/pages/DriverLocalPickups'
 import DriverFlowerOrder from './components/admin/pages/DriverFlowerOrder'
 import AddFuelExpenses from './components/admin/pages/AddFuelExpenses'
 import AddExcessKM from './components/admin/pages/AddExcessKM'
+import EditExcessKM from './components/admin/pages/EditExcessKM'
+import ViewExcessKM from './components/admin/pages/ViewExcessKM'
 import AddAdvancePay from './components/admin/pages/AddAdvancePay'
 import FuelExpenseManagement from './components/admin/pages/FuelExpenseManagement'
 import ViewFuelExpense from './components/admin/pages/ViewFuelExpense'
@@ -621,6 +623,30 @@ const App = () => {
               <Layout>
                 <RequirePermission module="Drivers" action="startkm_endkm">
                   <StartEndKMManagement />
+                </RequirePermission>
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/excess-km/view/:id"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <RequirePermission module="Drivers" action="startkm_endkm">
+                  <ViewExcessKM />
+                </RequirePermission>
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/excess-km/edit/:id"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <RequirePermission module="Drivers" action="startkm_endkm">
+                  <EditExcessKM />
                 </RequirePermission>
               </Layout>
             </ProtectedRoute>

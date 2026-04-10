@@ -5,6 +5,7 @@ import { getPresentDriversToday } from '../../../api/driverApi';
 import { getFlowerOrderAssignment, updateStage3Assignment } from '../../../api/flowerOrderAssignmentApi';
 import { getAllAirports } from '../../../api/airportApi';
 import InsufficientStockModal from '../../../components/common/InsufficientStockModal';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
 const FlowerOrderAssignStage3 = () => {
   const navigate = useNavigate();
@@ -135,10 +136,10 @@ const FlowerOrderAssignStage3 = () => {
         ]);
 
         const presentDrivers = driversResponse.data?.map(record => record.driver).filter(d => d) || [];
-        setDrivers(presentDrivers);
-        setAirports(airportsResponse.data || []);
+        setDrivers(sortDropdownObjects(presentDrivers, (d) => d.driver_name));
+        setAirports(sortDropdownObjects(airportsResponse.data || [], (a) => a.name));
         if (tapesResponse.success) {
-          setTapes(tapesResponse.data || []);
+          setTapes(sortDropdownObjects(tapesResponse.data || [], (t) => t.name || t.tape_name));
         }
 
         // Load assignment data to get stage2 and stage3 assignments
@@ -1260,7 +1261,7 @@ const FlowerOrderAssignStage3 = () => {
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
                         >
                           <option value="">Select airport...</option>
-                          {airports.map((airport) => (
+                          {sortDropdownObjects(airports, (airport) => airport.name).map((airport) => (
                             <option key={airport.aid} value={airport.name}>
                               {airport.name}
                             </option>
@@ -1284,7 +1285,7 @@ const FlowerOrderAssignStage3 = () => {
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
                         >
                           <option value="">Select driver...</option>
-                          {drivers.map(driver => (
+                          {sortDropdownObjects(drivers, (driver) => driver.driver_name).map(driver => (
                             <option key={driver.did} value={driver.did}>
                               {`${driver.driver_name} (${driver.driver_id || driver.did})`}
                             </option>
@@ -1466,9 +1467,9 @@ const FlowerOrderAssignStage3 = () => {
                                     }
                                   }}
                                 >
-                                  <option value="pending">Pending</option>
-                                  <option value="ontrip">On Trip</option>
                                   <option value="completed">Completed</option>
+                                  <option value="ontrip">On Trip</option>
+                                  <option value="pending">Pending</option>
                                 </select>
                               </td>
                             </tr>
@@ -1513,7 +1514,7 @@ const FlowerOrderAssignStage3 = () => {
                                                       }}
                                                     >
                                                       <option value="">Select tape...</option>
-                                                      {tapes.map(tape => (
+                                                      {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
                                                         <option key={tape.iid} value={tape.name}>{tape.name}</option>
                                                       ))}
                                                     </select>
@@ -1692,9 +1693,9 @@ const FlowerOrderAssignStage3 = () => {
                                   }
                                 }}
                               >
-                                <option value="pending">Pending</option>
-                                <option value="ontrip">On Trip</option>
                                 <option value="completed">Completed</option>
+                                <option value="ontrip">On Trip</option>
+                                <option value="pending">Pending</option>
                               </select>
                             </div>
                           </div>
@@ -1741,7 +1742,7 @@ const FlowerOrderAssignStage3 = () => {
                                                 }}
                                               >
                                                 <option value="">Select tape...</option>
-                                                {tapes.map(tape => (
+                                                {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
                                                   <option key={tape.iid} value={tape.name}>{tape.name}</option>
                                                 ))}
                                               </select>

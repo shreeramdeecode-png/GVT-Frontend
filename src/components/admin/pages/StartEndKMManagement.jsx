@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Plus, ArrowLeft, MoreVertical, Eye, Edit, Trash2 } from 'lucide-react';
 import { getExcessKMsByDriverId, deleteExcessKM } from '../../../api/excessKmApi';
+import { getDriverById } from '../../../api/driverApi';
 import toast from 'react-hot-toast';
 
 const StartEndKMManagement = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const queryDriverId = new URLSearchParams(location.search).get('driverId');
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedKM, setSelectedKM] = useState(null);
@@ -15,7 +17,7 @@ const StartEndKMManagement = () => {
   const dropdownRef = useRef(null);
 
   const [kmData, setKmData] = useState([]);
-  const [selectedDriverId] = useState(location.state?.driverId || '');
+  const [selectedDriverId] = useState(location.state?.driverId || queryDriverId || '');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -41,7 +43,19 @@ const StartEndKMManagement = () => {
         return;
       }
 
-      const response = await getExcessKMsByDriverId(selectedDriverId);
+      let effectiveDriverId = selectedDriverId;
+      // Some screens pass route ID/driver_id, while KM API expects did.
+      try {
+        const driverRes = await getDriverById(selectedDriverId);
+        const driver = driverRes?.data || driverRes;
+        if (driver?.did != null && driver.did !== '') {
+          effectiveDriverId = String(driver.did);
+        }
+      } catch {
+        // Fallback to incoming ID if resolving did fails
+      }
+
+      const response = await getExcessKMsByDriverId(effectiveDriverId);
       const data = response.data || response || [];
       setKmData(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -68,9 +82,9 @@ const StartEndKMManagement = () => {
   const handleAction = (action, km) => {
     const recordId = km?.id ?? km?.ekmid ?? km?.excess_km_id;
     if (action === 'view') {
-      navigate(`/excess-km/view/${recordId}`);
+      navigate(`/excess-km/view/${recordId}`, { state: { driverId: selectedDriverId } });
     } else if (action === 'edit') {
-      navigate(`/excess-km/edit/${recordId}`);
+      navigate(`/excess-km/edit/${recordId}`, { state: { driverId: selectedDriverId } });
     } else if (action === 'delete') {
       setSelectedKM(km);
       setShowDeleteModal(true);

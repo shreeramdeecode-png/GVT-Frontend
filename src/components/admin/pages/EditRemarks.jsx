@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { getRemarkById, updateRemark } from '../../../api/remarkApi';
 import { getDriverById, getAllDrivers } from '../../../api/driverApi';
 import toast from 'react-hot-toast';
+import { sortDropdownStrings } from '../../../utils/dropdownSort';
 
 const EditRemarks = () => {
   const navigate = useNavigate();
@@ -122,7 +123,7 @@ const EditRemarks = () => {
                     required
                   >
                     <option value="">Select Vehicle</option>
-                    {vehicles.map((vehicle, index) => (
+                    {sortDropdownStrings(vehicles).map((vehicle, index) => (
                       <option key={index} value={vehicle}>
                         {vehicle}
                       </option>

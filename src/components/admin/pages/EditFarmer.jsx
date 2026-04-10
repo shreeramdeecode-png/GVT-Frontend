@@ -5,6 +5,15 @@ import { getFarmerById, updateFarmer } from '../../../api/farmerApi';
 import { getAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 
+const normalizePhoneWithCountryCode = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('+')) return raw;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+91 ${digits}`;
+  return raw;
+};
+
 const EditFarmer = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -80,8 +89,8 @@ const EditFarmer = () => {
           contact_person: data.contact_person || '',
           tape_color: data.tape_color || '',
           dialing_person: data.dealing_person || '',
-          primary_phone: data.phone || '',
-          secondary_phone: data.secondary_phone || '',
+          primary_phone: normalizePhoneWithCountryCode(data.phone || ''),
+          secondary_phone: normalizePhoneWithCountryCode(data.secondary_phone || ''),
           email: data.email || '',
           account_holder_name: data.account_holder_name || '',
           bank_name: data.bank_name || '',

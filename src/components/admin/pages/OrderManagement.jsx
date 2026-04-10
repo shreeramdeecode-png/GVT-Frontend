@@ -1,8 +1,93 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, MoreVertical, ChevronLeft, ChevronRight, Eye, Edit, Trash2 } from 'lucide-react';
 import { getAllOrders, deleteOrder, getAllDrafts, deleteDraft } from '../../../api/orderApi'; // Import the order and draft APIs
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal'; // Import the confirm delete modal
+
+const filterByDateRange = (items, timeFilter, getItemDate) => {
+  if (timeFilter === 'All Time') return items;
+
+  const now = new Date();
+
+  const inRange = (d, start, end) => d >= start && d <= end;
+
+  let startDate;
+  let endDate;
+
+  switch (timeFilter) {
+    case 'Today':
+      startDate = new Date(now);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Yesterday':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setDate(now.getDate() - 1);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last 7 Days':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last 30 Days':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 30);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'This Month':
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last Month':
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      break;
+    default:
+      return items;
+  }
+
+  return items.filter(item => {
+    const raw = getItemDate(item);
+    if (raw == null || raw === '') return false;
+    const itemDate = new Date(raw);
+    if (Number.isNaN(itemDate.getTime())) return false;
+    return inRange(itemDate, startDate, endDate);
+  });
+};
+
+const escapeCsvCell = (val) => {
+  const s = String(val ?? '');
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+};
+
+/** First usable date for filtering (API may use camelCase or snake_case). Prefer business received date. */
+const getOrderFilterDate = (o) =>
+  o.orderReceivedDate ?? o.createdAt ?? o.updatedAt ?? o.created_at ?? o.updated_at ?? null;
+
+const getDraftFilterDate = (d) =>
+  d.createdAt ?? d.updatedAt ?? d.created_at ?? d.updated_at ?? null;
+
+const normalizeStatusKey = (s) =>
+  String(s ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/_/g, '');
 
 const OrderManagement = () => {
   const navigate = useNavigate();
@@ -18,8 +103,6 @@ const OrderManagement = () => {
   const statusFilterOptions = ['All Status', 'Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
   const [orders, setOrders] = useState([]); // State for orders
   const [drafts, setDrafts] = useState([]); // State for drafts
-  const [filteredOrders, setFilteredOrders] = useState([]); // State for filtered orders
-  const [filteredDrafts, setFilteredDrafts] = useState([]); // State for filtered drafts
   const [activeTab, setActiveTab] = useState(() => {
     // Check URL parameters to determine initial tab
     const urlParams = new URLSearchParams(window.location.search);
@@ -30,6 +113,8 @@ const OrderManagement = () => {
   const [openDropdown, setOpenDropdown] = useState(null);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const dropdownRef = useRef(null);
+  const timeFilterRef = useRef(null);
+  const statusFilterRef = useRef(null);
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, orderId: null });
   const [deleteDraftModal, setDeleteDraftModal] = useState({ isOpen: false, draftId: null });
 
@@ -56,8 +141,8 @@ const OrderManagement = () => {
             order_type: order.order_type,
             status: order.order_status || 'pending',
             products: order.items.map(item => item.product).filter(Boolean),
-            createdAt: order.createdAt,
-            updatedAt: order.updatedAt
+            createdAt: order.createdAt ?? order.created_at ?? null,
+            updatedAt: order.updatedAt ?? order.updated_at ?? null
           }));
 
           // Sort by createdAt descending (newest first)
@@ -107,8 +192,8 @@ const OrderManagement = () => {
             packingDate: draft.packing_date || '—',
             total: '₹' + (parseFloat(draft.total_amount) || 0).toLocaleString(),
             products,
-            createdAt: draft.createdAt,
-            updatedAt: draft.updatedAt
+            createdAt: draft.createdAt ?? draft.created_at ?? null,
+            updatedAt: draft.updatedAt ?? draft.updated_at ?? null
           };
         });
         setDrafts(draftData);
@@ -157,52 +242,92 @@ const OrderManagement = () => {
     };
   }, [activeTab]);
 
-  // Filter the orders and drafts based on filters and search query
-  useEffect(() => {
-    // Filter orders
+  const filteredOrders = useMemo(() => {
     let filtered = [...orders];
+    filtered = filterByDateRange(filtered, timeFilter, (o) => getOrderFilterDate(o));
 
-    // Apply time filter
-    filtered = filterByDateRange(filtered, timeFilter);
-
-    // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(order =>
         String(order.id).toLowerCase().includes(query) ||
         String(order.orderId || '').toLowerCase().includes(query) ||
-        order.customer.toLowerCase().includes(query)
+        (order.customer && order.customer.toLowerCase().includes(query))
       );
     }
 
-    // Apply status filter
     if (statusFilter !== 'All Status') {
-      const statusValue = statusFilter.toLowerCase();
-      filtered = filtered.filter(order =>
-        order.status && order.status.toLowerCase() === statusValue
-      );
+      const wanted = normalizeStatusKey(statusFilter);
+      filtered = filtered.filter(order => normalizeStatusKey(order.status) === wanted);
     }
 
+    return filtered;
+  }, [orders, searchQuery, statusFilter, timeFilter]);
 
+  const filteredDrafts = useMemo(() => {
+    let filtered = [...drafts];
+    filtered = filterByDateRange(filtered, timeFilter, (d) => getDraftFilterDate(d));
 
-    setFilteredOrders(filtered);
-
-    // Filter drafts
-    let filteredDraftData = [...drafts];
-
-    // Apply search filter to drafts
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      filteredDraftData = filteredDraftData.filter(draft =>
+      filtered = filtered.filter(draft =>
         String(draft.id).toLowerCase().includes(query) ||
-        draft.customer.toLowerCase().includes(query)
+        (draft.customer && draft.customer.toLowerCase().includes(query)) ||
+        (draft.productList && draft.productList.toLowerCase().includes(query))
       );
     }
 
+    return filtered;
+  }, [drafts, searchQuery, timeFilter]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, timeFilter, activeTab]);
 
-    setFilteredDrafts(filteredDraftData);
-  }, [orders, drafts, searchQuery, statusFilter, timeFilter]);
+  const handleExport = () => {
+    const rows = [];
+    let filename = 'export';
+
+    if (activeTab === 'orders') {
+      filename = `orders-${new Date().toISOString().slice(0, 10)}`;
+      rows.push(['Order ID', 'Order Received Date', 'Customer', 'No of Boxes/Bag', 'Type of Packing', 'Net Weight', 'Gross Weight', 'Status'].map(escapeCsvCell).join(','));
+      filteredOrders.forEach((order) => {
+        const received = order.orderReceivedDate
+          ? new Date(order.orderReceivedDate).toLocaleDateString()
+          : '';
+        rows.push([
+          order.orderId || order.id,
+          received,
+          order.customer,
+          order.boxes,
+          order.packing,
+          order.netWeight,
+          order.grossWeight,
+          order.status || ''
+        ].map(escapeCsvCell).join(','));
+      });
+    } else {
+      filename = `drafts-${new Date().toISOString().slice(0, 10)}`;
+      rows.push(['Draft ID', 'Customer', 'Product list', 'Order type', 'Packing date', 'Total'].map(escapeCsvCell).join(','));
+      filteredDrafts.forEach((draft) => {
+        rows.push([
+          draft.id,
+          draft.customer,
+          draft.productList,
+          draft.orderType,
+          draft.packingDate,
+          draft.total
+        ].map(escapeCsvCell).join(','));
+      });
+    }
+
+    const csv = rows.join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${filename}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -210,12 +335,11 @@ const OrderManagement = () => {
         setOpenDropdown(null);
       }
 
-      // Close filter dropdowns when clicking outside
+      // Close filter dropdowns when clicking outside (menu is sibling of toggle, not inside [data-filter])
       if (showTimeFilter || showStatusFilter) {
-        const timeFilterButton = event.target.closest('[data-filter="time"]');
-        const statusFilterButton = event.target.closest('[data-filter="status"]');
-
-        if (!timeFilterButton && !statusFilterButton) {
+        const insideTime = timeFilterRef.current?.contains(event.target);
+        const insideStatus = statusFilterRef.current?.contains(event.target);
+        if (!insideTime && !insideStatus) {
           setShowTimeFilter(false);
           setShowStatusFilter(false);
         }
@@ -257,11 +381,11 @@ const OrderManagement = () => {
           packing: order.items.map(item => item.packing_type).filter(Boolean)[0] || 'N/A',
           netWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.net_weight) || 0), 0) + ' kg',
           grossWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.gross_weight) || 0), 0) + ' kg',
-
+          order_type: order.order_type,
           status: order.order_status || 'pending',
           products: order.items.map(item => item.product).filter(Boolean),
-          createdAt: order.createdAt,
-          updatedAt: order.updatedAt
+          createdAt: order.createdAt ?? order.created_at ?? null,
+          updatedAt: order.updatedAt ?? order.updated_at ?? null
         }));
         setOrders(transformedOrders);
       }
@@ -298,46 +422,6 @@ const OrderManagement = () => {
     setOpenDropdown(null);
   };
 
-  // Helper function to filter by date range
-  const filterByDateRange = (orders, timeFilter) => {
-    if (timeFilter === 'All Time') return orders;
-
-    const now = new Date();
-    let startDate = new Date();
-
-    switch (timeFilter) {
-      case 'Today':
-        startDate.setHours(0, 0, 0, 0);
-        break;
-      case 'Yesterday':
-        startDate.setDate(now.getDate() - 1);
-        startDate.setHours(0, 0, 0, 0);
-        break;
-      case 'Last 7 Days':
-        startDate.setDate(now.getDate() - 7);
-        break;
-      case 'Last 30 Days':
-        startDate.setDate(now.getDate() - 30);
-        break;
-      case 'This Month':
-        startDate.setDate(1);
-        startDate.setHours(0, 0, 0, 0);
-        break;
-      case 'Last Month':
-        startDate.setMonth(now.getMonth() - 1);
-        startDate.setDate(1);
-        break;
-      default:
-        return orders;
-    }
-
-    return orders.filter(order => {
-      // Note: We need createdAt/updatedAt fields in order objects for this to work
-      const orderDate = new Date(order.createdAt || order.updatedAt || now);
-      return orderDate >= startDate;
-    });
-  };
-
   const handleDraftAction = (action, draftId) => {
     if (action === 'view') {
       navigate(`/drafts/${draftId}`);
@@ -352,7 +436,7 @@ const OrderManagement = () => {
   };
 
   const statsCards = [
-    { title: 'Total Orders', value: (filteredOrders.length > 0 ? filteredOrders : orders).length, bgColor: 'bg-[#D4F4E8]', textColor: 'text-[#0D7C66]' },
+    { title: 'Total Orders', value: filteredOrders.length, bgColor: 'bg-[#D4F4E8]', textColor: 'text-[#0D7C66]' },
     { title: 'Created', value: '28', bgColor: 'bg-[#B8F3DC]', textColor: 'text-[#0D7C66]' },
     { title: 'Assigned', value: '45', bgColor: 'bg-[#7FE5B8]', textColor: 'text-[#0D7C66]' },
     { title: 'In Transit', value: '51', bgColor: 'bg-[#1CB68B]', textColor: 'text-white' },
@@ -420,13 +504,13 @@ const OrderManagement = () => {
           </div>
           <div className="flex flex-wrap gap-3">
             {/* Time Filter Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={timeFilterRef}>
               <button
+                type="button"
                 data-filter="time"
                 onClick={() => {
                   setShowTimeFilter(!showTimeFilter);
                   setShowStatusFilter(false);
-                  setShowProductFilter(false);
                 }}
                 className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors duration-200"
               >
@@ -453,13 +537,13 @@ const OrderManagement = () => {
             </div>
 
             {/* Status Filter Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={statusFilterRef}>
               <button
+                type="button"
                 data-filter="status"
                 onClick={() => {
                   setShowStatusFilter(!showStatusFilter);
                   setShowTimeFilter(false);
-                  setShowProductFilter(false);
                 }}
                 className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors duration-200"
               >
@@ -487,7 +571,11 @@ const OrderManagement = () => {
 
 
 
-            <button className="px-6 py-2.5 border border-[#0D7C66] text-[#0D7C66] rounded-lg hover:bg-[#0D7C66] hover:text-white transition-colors duration-200 font-medium">
+            <button
+              type="button"
+              onClick={handleExport}
+              className="px-6 py-2.5 border border-[#0D7C66] text-[#0D7C66] rounded-lg hover:bg-[#0D7C66] hover:text-white transition-colors duration-200 font-medium"
+            >
               Export
             </button>
           </div>
@@ -545,16 +633,24 @@ const OrderManagement = () => {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {(() => {
-                  // Pagination logic
                   const itemsPerPage = 7;
-                  const displayOrders = filteredOrders.length > 0 ? filteredOrders : orders;
                   const startIndex = (currentPage - 1) * itemsPerPage;
                   const endIndex = startIndex + itemsPerPage;
-                  const currentOrders = displayOrders.slice(startIndex, endIndex);
+                  const currentOrders = filteredOrders.slice(startIndex, endIndex);
 
-                  return currentOrders.map((order, index) => (
+                  if (filteredOrders.length === 0) {
+                    return (
+                      <tr>
+                        <td colSpan="8" className="px-6 py-8 text-center text-sm text-gray-500">
+                          {orders.length === 0 ? 'No orders yet' : 'No orders match your filters'}
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return currentOrders.map((order) => (
                     <tr
-                      key={index}
+                      key={order.id}
                       className="hover:bg-gray-50 transition-colors duration-150"
                     >
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
@@ -602,8 +698,7 @@ const OrderManagement = () => {
             <p className="text-sm text-gray-600">
               {(() => {
                 const itemsPerPage = 7;
-                const displayOrders = filteredOrders.length > 0 ? filteredOrders : orders;
-                const totalItems = displayOrders.length;
+                const totalItems = filteredOrders.length;
                 const startItem = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
                 const endItem = Math.min(currentPage * itemsPerPage, totalItems);
                 return `Showing ${startItem}-${endItem} of ${totalItems} Orders`;
@@ -612,8 +707,7 @@ const OrderManagement = () => {
             <div className="flex items-center gap-2">
               {(() => {
                 const itemsPerPage = 7;
-                const displayOrders = filteredOrders.length > 0 ? filteredOrders : orders;
-                const totalPages = Math.ceil(displayOrders.length / itemsPerPage);
+                const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
 
                 return (
                   <>
@@ -696,8 +790,8 @@ const OrderManagement = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {(filteredDrafts.length > 0 ? filteredDrafts : drafts).length > 0 ? (
-                  (filteredDrafts.length > 0 ? filteredDrafts : drafts).map((draft, index) => (
+                {filteredDrafts.length > 0 ? (
+                  filteredDrafts.map((draft, index) => (
                     <tr
                       key={index}
                       className="hover:bg-gray-50 transition-colors duration-150"
@@ -733,7 +827,7 @@ const OrderManagement = () => {
                 ) : (
                   <tr>
                     <td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">
-                      No drafts found
+                      {drafts.length === 0 ? 'No drafts yet' : 'No drafts match your filters'}
                     </td>
                   </tr>
                 )}
@@ -764,8 +858,7 @@ const OrderManagement = () => {
               </button>
               <button
                 onClick={() => {
-                  const displayOrders = filteredOrders.length > 0 ? filteredOrders : orders;
-                  const order = displayOrders.find(o => o.id === openDropdown);
+                  const order = filteredOrders.find(o => o.id === openDropdown);
                   handleAction('edit', openDropdown, order?.order_type);
                 }}
                 className="w-full text-left px-4 py-2 text-sm text-[#0D5C4D] hover:bg-[#F0F4F3] transition-colors flex items-center gap-2"

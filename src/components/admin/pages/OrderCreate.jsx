@@ -86,6 +86,17 @@ const NewOrder = () => {
     return 'local';
   };
 
+  // Keep only digits and a single decimal point for numeric inputs.
+  const sanitizeDecimalInput = (value) => {
+    const raw = String(value ?? '');
+    const digitsAndDot = raw.replace(/[^0-9.]/g, '');
+    const firstDotIndex = digitsAndDot.indexOf('.');
+    if (firstDotIndex === -1) return digitsAndDot;
+    const beforeDot = digitsAndDot.slice(0, firstDotIndex + 1);
+    const afterDot = digitsAndDot.slice(firstDotIndex + 1).replace(/\./g, '');
+    return beforeDot + afterDot;
+  };
+
   const toggleMoreDetails = (id) => {
     setProducts(prev =>
       prev.map(product =>
@@ -1523,7 +1534,13 @@ const NewOrder = () => {
                             type="text"
                             value={product.netWeight}
                             onChange={(e) =>
-                              handleProductChange(product.id, 'netWeight', e.target.value)
+                              handleProductChange(
+                                product.id,
+                                'netWeight',
+                                formData.orderType === 'local'
+                                  ? sanitizeDecimalInput(e.target.value)
+                                  : e.target.value
+                              )
                             }
                             onKeyDown={(e) => {
                               const colIndex = formData.orderType === 'local' ? 1 : 4;

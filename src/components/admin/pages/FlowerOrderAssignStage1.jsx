@@ -12,6 +12,7 @@ import { getPresentLaboursToday } from '../../../api/labourAttendanceApi';
 import { getPresentDriversToday } from '../../../api/driverApi';
 import { getAllProducts } from '../../../api/productApi';
 import { getAllProductCounts } from '../../../api/productCountApi';
+import { sortDropdownObjects } from '../../../utils/dropdownSort';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
 
@@ -297,11 +298,11 @@ const FlowerOrderAssignStage1 = () => {
         const drivers = driversRes.data?.map(record => record.driver).filter(d => d) || [];
 
         setAssignmentOptions({
-          farmers,
-          suppliers,
-          thirdParties,
-          labours,
-          drivers
+          farmers: sortDropdownObjects(farmers, (f) => f.farmer_name),
+          suppliers: sortDropdownObjects(suppliers, (s) => s.supplier_name),
+          thirdParties: sortDropdownObjects(thirdParties, (tp) => tp.third_party_name),
+          labours: sortDropdownObjects(labours, (l) => l.full_name),
+          drivers: sortDropdownObjects(drivers, (d) => d.driver_name)
         });
 
         try {
@@ -1159,16 +1160,16 @@ const FlowerOrderAssignStage1 = () => {
                         }}
                       >
                         <option value="">Select name...</option>
-                        {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                        {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                           const availability = farmerAvailability[farmer.fid] || [];
                           return availability.some(item => item.vegetable_name === productName);
                         }).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                         ))}
-                        {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                        {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                           <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                         ))}
-                        {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                        {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                           <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                         ))}
                       </select>
@@ -1455,16 +1456,16 @@ const FlowerOrderAssignStage1 = () => {
                       }}
                     >
                       <option value="">Select name...</option>
-                      {row.entityType === 'farmer' && assignmentOptions.farmers.filter(farmer => {
+                      {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
                         const availability = farmerAvailability[farmer.fid] || [];
                         return availability.some(item => item.vegetable_name === productName);
                       }).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                       ))}
-                      {row.entityType === 'supplier' && assignmentOptions.suppliers.map(supplier => (
+                      {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
                         <option key={`supplier-${supplier.sid}`} value={supplier.supplier_name}>{supplier.supplier_name}</option>
                       ))}
-                      {row.entityType === 'thirdParty' && assignmentOptions.thirdParties.map(thirdParty => (
+                      {row.entityType === 'thirdParty' && sortDropdownObjects(assignmentOptions.thirdParties, (thirdParty) => thirdParty.third_party_name).map(thirdParty => (
                         <option key={`thirdParty-${thirdParty.tpid}`} value={thirdParty.third_party_name}>{thirdParty.third_party_name}</option>
                       ))}
                     </select>
@@ -1713,7 +1714,7 @@ const FlowerOrderAssignStage1 = () => {
                             }}
                           />
                           <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                            {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => {
+                            {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
                               const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
                               return (
                                 <label
@@ -1760,7 +1761,7 @@ const FlowerOrderAssignStage1 = () => {
                       }}
                     >
                       <option value="">Select driver...</option>
-                      {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                      {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                         <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                           {driver.driver_name} - {driver.driver_id}
                         </option>
@@ -1854,7 +1855,7 @@ const FlowerOrderAssignStage1 = () => {
                           }}
                         />
                         <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                          {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => {
+                          {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
                             const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
                             return (
                               <label
@@ -1903,7 +1904,7 @@ const FlowerOrderAssignStage1 = () => {
                     }}
                   >
                     <option value="">Select driver...</option>
-                    {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                    {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                       <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                         {driver.driver_name} - {driver.driver_id}
                       </option>
@@ -2029,9 +2030,9 @@ const FlowerOrderAssignStage1 = () => {
                                 onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [assignment.routeId]: e.target.value }))}
                               >
                                 <option value="">Select...</option>
+                                <option value="Completed">Completed</option>
                                 <option value="Drop">Drop</option>
                                 <option value="Picked and Packed">Picked and Packed</option>
-                                <option value="Completed">Completed</option>
                               </select>
                               {assignmentStatuses[assignment.routeId] === 'Drop' && (
                                 <div className="mt-2 space-y-2">
@@ -2050,7 +2051,7 @@ const FlowerOrderAssignStage1 = () => {
                                       onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [`${assignment.routeId}-dropDriver`]: e.target.value }))}
                                     >
                                       <option value="">Select driver...</option>
-                                      {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                                      {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                                         <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                                           {driver.driver_name} - {driver.driver_id}
                                         </option>
@@ -2148,7 +2149,7 @@ const FlowerOrderAssignStage1 = () => {
                                     onChange={(e) => setAssignmentStatuses(prev => ({ ...prev, [`${assignment.routeId}-dropDriver`]: e.target.value }))}
                                   >
                                     <option value="">Select driver...</option>
-                                    {assignmentOptions.drivers && assignmentOptions.drivers.map(driver => (
+                                    {assignmentOptions.drivers && sortDropdownObjects(assignmentOptions.drivers, (driver) => driver.driver_name).map(driver => (
                                       <option key={`driver-${driver.did}`} value={`${driver.driver_name} - ${driver.driver_id}`}>
                                         {driver.driver_name} - {driver.driver_id}
                                       </option>

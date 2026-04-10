@@ -5,6 +5,7 @@ import EditInventory from './EditInventory';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllInventory, deleteInventory } from '../../../api/inventoryApi';
 import { getInventoryQuantities } from '../../../api/inventoryStockApi';
+import { sortDropdownStrings } from '../../../utils/dropdownSort';
 
 const PackingInventory = () => {
   const navigate = useNavigate();
@@ -254,7 +255,7 @@ const PackingInventory = () => {
                     className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm appearance-none bg-white cursor-pointer"
                   >
                     <option>Category</option>
-                    {categories.map(cat => (
+                    {sortDropdownStrings(categories).map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                   </select>

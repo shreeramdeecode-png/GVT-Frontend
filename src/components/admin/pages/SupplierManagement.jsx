@@ -283,8 +283,8 @@ const SupplierDashboard = () => {
           onChange={(e) => setSortOrder(e.target.value)}
           className="px-4 py-3 bg-[#F0F4F3] border-none rounded-xl text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer"
         >
-          <option value="recent">Recently Added</option>
           <option value="early">Early Added</option>
+          <option value="recent">Recently Added</option>
         </select>
       </div>
 

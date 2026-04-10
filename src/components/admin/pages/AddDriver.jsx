@@ -3,6 +3,25 @@ import { useNavigate } from 'react-router-dom';
 import { Upload, Eye, EyeOff, ChevronRight, ArrowLeft } from 'lucide-react';
 import { createDriver } from '../../../api/driverApi';
 import { createNotification } from '../../../api/notificationApi';
+import { sortDropdownStrings } from '../../../utils/dropdownSort';
+
+const EXPIRY_REMINDER_DAYS = 30;
+
+const toYMD = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+};
+
+const daysUntil = (value) => {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.ceil((d - now) / (1000 * 60 * 60 * 24));
+};
 
 const AddDriver = () => {
   const navigate = useNavigate();
@@ -23,6 +42,8 @@ const AddDriver = () => {
     capacity: '',
     insuranceNumber: '',
     insuranceExpiry: '',
+    fitnessCertificate: '',
+    fitnessCertificateExpiry: '',
     vehicleCondition: 'Good',
     pollutionCertificate: '',
     pollutionCertificateExpiry: '',
@@ -42,6 +63,7 @@ const AddDriver = () => {
   const [licenseImage, setLicenseImage] = useState(null);
   const [idProof, setIdProof] = useState(null);
   const [insuranceDoc, setInsuranceDoc] = useState(null);
+  const [fitnessCertificateDoc, setFitnessCertificateDoc] = useState(null);
   const [pollutionDoc, setPollutionDoc] = useState(null);
   const [kaPermitDoc, setKaPermitDoc] = useState(null);
   const [vehicleTypes, setVehicleTypes] = useState([
@@ -54,6 +76,39 @@ const AddDriver = () => {
   const [showNewVehicleInput, setShowNewVehicleInput] = useState(false);
   const [newVehicleType, setNewVehicleType] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const createExpiryNotifications = async () => {
+    const vehicleNumber = (formData.vehicleNumber || 'N/A').trim();
+    const docs = [
+      { label: 'Insurance', date: formData.insuranceExpiry },
+      { label: 'Fitness Certificate', date: formData.fitnessCertificateExpiry },
+      { label: 'Pollution Certificate', date: formData.pollutionCertificateExpiry },
+      { label: 'Other State Permit', date: formData.kaPermitExpiry }
+    ];
+
+    for (const doc of docs) {
+      const ymd = toYMD(doc.date);
+      if (!ymd) continue;
+      const remaining = daysUntil(ymd);
+      if (remaining == null || remaining > EXPIRY_REMINDER_DAYS) continue;
+      const isOverdue = remaining < 0;
+      const absDays = Math.abs(remaining);
+      const timingText = isOverdue
+        ? `expired ${absDays} day${absDays === 1 ? '' : 's'} ago`
+        : `expires in ${remaining} day${remaining === 1 ? '' : 's'}`;
+
+      try {
+        await createNotification({
+          title: `${doc.label} renewal reminder - ${vehicleNumber}`,
+          message: `${doc.label} for vehicle ${vehicleNumber} (${formData.driverName || 'Driver'}) ${timingText}. Due date: ${ymd}.`,
+          type: isOverdue ? 'error' : 'warning',
+          category: 'Drivers'
+        });
+      } catch (error) {
+        console.error(`Failed to create ${doc.label} reminder notification:`, error);
+      }
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -89,6 +144,8 @@ const AddDriver = () => {
         setIdProof(file);
       } else if (type === 'insurance') {
         setInsuranceDoc(file);
+      } else if (type === 'fitnessCertificate') {
+        setFitnessCertificateDoc(file);
       } else if (type === 'pollution') {
         setPollutionDoc(file);
       } else if (type === 'kaPermit') {
@@ -120,6 +177,8 @@ const AddDriver = () => {
       formDataToSend.append('capacity', formData.capacity);
       if (formData.insuranceNumber) formDataToSend.append('insurance_number', formData.insuranceNumber);
       if (formData.insuranceExpiry) formDataToSend.append('insurance_expiry_date', formData.insuranceExpiry);
+      formDataToSend.append('fitness_certificate', formData.fitnessCertificate);
+      formDataToSend.append('fitness_certificate_expiry_date', formData.fitnessCertificateExpiry);
       formDataToSend.append('vehicle_condition', formData.vehicleCondition);
       if (formData.pollutionCertificate) formDataToSend.append('pollution_certificate', formData.pollutionCertificate);
       if (formData.pollutionCertificateExpiry) formDataToSend.append('pollution_certificate_expiry_date', formData.pollutionCertificateExpiry);
@@ -139,10 +198,12 @@ const AddDriver = () => {
       if (licenseImage) formDataToSend.append('license_image', licenseImage);
       if (idProof) formDataToSend.append('driver_id_proof', idProof);
       if (insuranceDoc) formDataToSend.append('insurance_doc', insuranceDoc);
+      if (fitnessCertificateDoc) formDataToSend.append('fitness_certificate_doc', fitnessCertificateDoc);
       if (pollutionDoc) formDataToSend.append('pollution_doc', pollutionDoc);
       if (kaPermitDoc) formDataToSend.append('ka_permit_doc', kaPermitDoc);
       
       await createDriver(formDataToSend);
+      await createExpiryNotifications();
 
       try {
         await createNotification({
@@ -527,6 +588,48 @@ const AddDriver = () => {
               {/* Upload Pollution Certificate Document */}
               <div>
                 <label className="block text-sm text-gray-700 mb-2">
+                  Upload Fitness Certificate
+                </label>
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <input
+                      type="file"
+                      id="fitnessCertificateDocUpload"
+                      onChange={(e) => handleFileUpload('fitnessCertificate', e)}
+                      accept=".jpg,.jpeg,.png,.gif,.pdf"
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="fitnessCertificateDocUpload"
+                      className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-200 transition-colors"
+                    >
+                      <Upload className="w-6 h-6 text-gray-600" />
+                    </label>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById('fitnessCertificateDocUpload').click()}
+                      className="px-6 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      Upload File
+                    </button>
+                    {fitnessCertificateDoc ? (
+                      <p className="text-xs text-green-600 mt-2 font-medium">
+                        ✓ {fitnessCertificateDoc.name}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-2">
+                        Upload fitness certificate: JPG, PNG, GIF or PDF. Max 5MB.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Upload Pollution Certificate Document */}
+              <div>
+                <label className="block text-sm text-gray-700 mb-2">
                   Upload Pollution Certificate
                 </label>
                 <div className="flex items-center gap-4">
@@ -652,7 +755,7 @@ const AddDriver = () => {
                       required
                     >
                       <option value="">Select available vehicle</option>
-                      {vehicleTypes.map(type => (
+                      {sortDropdownStrings(vehicleTypes).map(type => (
                         <option key={type} value={type}>
                           {type.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
                         </option>
@@ -755,6 +858,37 @@ const AddDriver = () => {
                 />
               </div>
 
+              {/* Fitness Certificate */}
+              <div>
+                <label className="block text-sm text-gray-700 mb-2">
+                  Fitness Certificate
+                </label>
+                <input
+                  type="text"
+                  name="fitnessCertificate"
+                  value={formData.fitnessCertificate}
+                  onChange={handleInputChange}
+                  placeholder="Enter fitness certificate number"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              {/* Fitness Certificate Expiry Date */}
+              <div>
+                <label className="block text-sm text-gray-700 mb-2">
+                  Fitness Certificate Expiry Date 
+                </label>
+                <input
+                  type="date"
+                  name="fitnessCertificateExpiry"
+                  value={formData.fitnessCertificateExpiry}
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                />
+              </div>
+
               {/* Vehicle Condition */}
               <div>
                 <label className="block text-sm text-gray-700 mb-2">
@@ -768,8 +902,8 @@ const AddDriver = () => {
                     className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent appearance-none text-sm cursor-pointer"
                   >
                     <option value="Excellent">Excellent</option>
-                    <option value="Good">Good</option>
                     <option value="Fair">Fair</option>
+                    <option value="Good">Good</option>
                     <option value="Poor">Poor</option>
                   </select>
                   <ChevronRight className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none rotate-90" />
@@ -1034,9 +1168,9 @@ const AddDriver = () => {
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
               >
                 <option value="Available">Available</option>
-                <option value="On Trip">On Trip</option>
                 <option value="Break">Break</option>
                 <option value="Inactive">Inactive</option>
+                <option value="On Trip">On Trip</option>
               </select>
             </div>
 
