@@ -121,14 +121,6 @@ const LabourDetails = () => {
           <div className="flex-1">
             <h2 className="text-2xl font-bold text-gray-800 mb-2">{labour?.name || 'N/A'}</h2>
             <p className="text-gray-600 mb-2">Labour ID: {labour?.id || 'N/A'}</p>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span className="flex items-center gap-1">
-                <span className="text-red-500">👷</span>
-                Joined on {labour?.joiningDate || 'N/A'}
-              </span>
-              <span>•</span>
-              <span>Last updated: Oct 28, 2025</span>
-            </div>
           </div>
 
           {/* Status Badges */}

@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, Download } from 'lucide-react';
+import { Search, ChevronDown, Download } from 'lucide-react';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getAllThirdParties } from '../../../api/thirdPartyApi';
 import { getPaidRecords, markAsPaid } from '../../../api/payoutApi';
+import { filterByDateRange, TIME_FILTER_OPTIONS } from '../../../utils/dateRangeFilter';
 
 const PayoutThirdParty = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
+  const [timeFilter, setTimeFilter] = useState('All Time');
+  const [showTimeFilter, setShowTimeFilter] = useState(false);
+  const timeFilterRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 7;
 
@@ -182,13 +186,32 @@ const PayoutThirdParty = () => {
   };
 
   const filteredPayouts = useMemo(() => {
+    let list = filterByDateRange([...payouts], timeFilter, (p) => p.lastSupplied);
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return payouts;
-    return payouts.filter(p =>
-      p.thirdName.toLowerCase().includes(query) ||
-      p.thirdCode.toLowerCase().includes(query)
-    );
-  }, [payouts, searchQuery]);
+    if (query) {
+      list = list.filter(
+        (p) =>
+          p.thirdName.toLowerCase().includes(query) ||
+          p.thirdCode.toLowerCase().includes(query) ||
+          String(p.orderId ?? '').toLowerCase().includes(query)
+      );
+    }
+    return list;
+  }, [payouts, searchQuery, timeFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, timeFilter]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showTimeFilter && !timeFilterRef.current?.contains(event.target)) {
+        setShowTimeFilter(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showTimeFilter]);
 
   const totalPages = Math.ceil(filteredPayouts.length / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -338,11 +361,33 @@ const PayoutThirdParty = () => {
               />
             </div>
 
-            {/* Filter Button */}
-            <button className="px-6 py-3 border border-gray-300 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 hover:bg-gray-50 text-gray-700 text-sm">
-              <Filter className="w-4 h-4" />
-              Filter
-            </button>
+            <div className="relative" ref={timeFilterRef}>
+              <button
+                type="button"
+                onClick={() => setShowTimeFilter(!showTimeFilter)}
+                className="flex items-center gap-2 px-4 py-3 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors w-full sm:w-auto justify-center"
+              >
+                <span className="text-gray-700 text-sm">{timeFilter}</span>
+                <ChevronDown className="w-4 h-4 text-gray-500" />
+              </button>
+              {showTimeFilter && (
+                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                  {TIME_FILTER_OPTIONS.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => {
+                        setTimeFilter(option);
+                        setShowTimeFilter(false);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Export Button */}
             <button className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm">

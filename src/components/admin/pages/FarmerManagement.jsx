@@ -15,6 +15,7 @@ import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllFarmers, deleteFarmer } from '../../../api/farmerApi';
 import { getAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
 import * as XLSX from 'xlsx-js-style';
 
 const Farmers = () => {
@@ -32,6 +33,21 @@ const Farmers = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('recent');
   const itemsPerPage = 7;
+  const [payoutStats, setPayoutStats] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getOrderEntityPayoutAmounts('farmer')
+      .then((s) => {
+        if (!cancelled) setPayoutStats(s);
+      })
+      .catch(() => {
+        if (!cancelled) setPayoutStats({ pendingAmount: 0, paidThisMonthAmount: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -240,8 +256,16 @@ const Farmers = () => {
   const stats = [
     { label: 'Total Farmers', value: totalFarmers.toString(), color: 'bg-gradient-to-r from-[#D1FAE5] to-[#A7F3D0]' },
     { label: 'Active Farmers', value: activeFarmers.toString(), color: 'bg-gradient-to-r from-[#6EE7B7] to-[#34D399]' },
-    { label: 'Pending Payouts', value: '309,847', color: 'bg-gradient-to-r from-[#10B981] to-[#059669]' },
-    { label: 'Total Paid (Month)', value: '156', color: 'bg-gradient-to-r from-[#047857] to-[#065F46]' }
+    {
+      label: 'Pending Payouts',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.pendingAmount),
+      color: 'bg-gradient-to-r from-[#10B981] to-[#059669]'
+    },
+    {
+      label: 'Total Paid (Month)',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.paidThisMonthAmount),
+      color: 'bg-gradient-to-r from-[#047857] to-[#065F46]'
+    }
   ];
 
   return (

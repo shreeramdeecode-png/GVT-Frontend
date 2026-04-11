@@ -5,6 +5,7 @@ import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllSuppliers, deleteSupplier } from '../../../api/supplierApi';
 import { getAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
 import * as XLSX from 'xlsx-js-style';
 
 const SupplierDashboard = () => {
@@ -23,6 +24,21 @@ const SupplierDashboard = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('recent');
   const itemsPerPage = 7;
+  const [payoutStats, setPayoutStats] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getOrderEntityPayoutAmounts('supplier')
+      .then((s) => {
+        if (!cancelled) setPayoutStats(s);
+      })
+      .catch(() => {
+        if (!cancelled) setPayoutStats({ pendingAmount: 0, paidThisMonthAmount: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const setPage = useCallback((page) => {
     const safePage = Math.max(1, page);
@@ -226,8 +242,16 @@ const SupplierDashboard = () => {
   const stats = [
     { label: 'Total Suppliers', value: totalSuppliers.toString(), color: 'bg-gradient-to-r from-[#D1FAE5] to-[#A7F3D0]' },
     { label: 'Active Suppliers', value: activeSuppliers.toString(), color: 'bg-gradient-to-r from-[#6EE7B7] to-[#34D399]' },
-    { label: 'Pending Payouts', value: '₹12.4 L', color: 'bg-gradient-to-r from-[#10B981] to-[#059669]' },
-    { label: 'Total Paid (Month)', value: '₹2.8 L', color: 'bg-gradient-to-r from-[#047857] to-[#065F46]' }
+    {
+      label: 'Pending Payouts',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.pendingAmount),
+      color: 'bg-gradient-to-r from-[#10B981] to-[#059669]'
+    },
+    {
+      label: 'Total Paid (Month)',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.paidThisMonthAmount),
+      color: 'bg-gradient-to-r from-[#047857] to-[#065F46]'
+    }
   ];
 
 

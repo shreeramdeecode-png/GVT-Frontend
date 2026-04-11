@@ -10,6 +10,7 @@ import { getAllLabours, deleteLabour, getLabourById } from '../../../api/labourA
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { BASE_URL } from '../../../config/config';
+import { getLabourManagementPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
 import * as XLSX from 'xlsx-js-style';
 
 const LabourManagement = () => {
@@ -30,6 +31,21 @@ const LabourManagement = () => {
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, labourId: null, labourName: '' });
   const [currentPage, setCurrentPage] = useState(pageFromUrl);
   const itemsPerPage = 7;
+  const [payoutStats, setPayoutStats] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getLabourManagementPayoutAmounts()
+      .then((s) => {
+        if (!cancelled) setPayoutStats(s);
+      })
+      .catch(() => {
+        if (!cancelled) setPayoutStats({ pendingAmount: 0, paidThisMonthAmount: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setCurrentPage(pageFromUrl);
@@ -216,13 +232,13 @@ const LabourManagement = () => {
     },
     {
       label: 'Pending Payouts',
-      value: '₹3.56 L',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.pendingAmount),
       color: 'bg-gradient-to-r from-[#10B981] to-[#059669]',
       textColor: 'text-white'
     },
     {
       label: 'Totally Paid(Month)',
-      value: '₹15.6 L',
+      value: payoutStats == null ? '…' : formatInrPayout(payoutStats.paidThisMonthAmount),
       color: 'bg-gradient-to-r from-[#047857] to-[#065F46]',
       textColor: 'text-white'
     }

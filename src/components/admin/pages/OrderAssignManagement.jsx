@@ -1,15 +1,92 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, ChevronLeft } from 'lucide-react';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getFlowerOrderAssignment } from '../../../api/flowerOrderAssignmentApi';
 import { getLocalOrder } from '../../../api/localOrderApi';
 
+const filterByDateRange = (items, timeFilter, getItemDate) => {
+  if (timeFilter === 'All Time') return items;
+
+  const now = new Date();
+  const inRange = (d, start, end) => d >= start && d <= end;
+
+  let startDate;
+  let endDate;
+
+  switch (timeFilter) {
+    case 'Today':
+      startDate = new Date(now);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Yesterday':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setDate(now.getDate() - 1);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last 7 Days':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last 30 Days':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 30);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'This Month':
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case 'Last Month':
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      break;
+    default:
+      return items;
+  }
+
+  return items.filter((item) => {
+    const raw = getItemDate(item);
+    if (raw == null || raw === '') return false;
+    const itemDate = new Date(raw);
+    if (Number.isNaN(itemDate.getTime())) return false;
+    return inRange(itemDate, startDate, endDate);
+  });
+};
+
+const getAssignOrderFilterDate = (o) =>
+  o.order_received_date ?? o.orderReceivedDate ?? o.createdAt ?? o.updatedAt ?? o.created_at ?? o.updated_at ?? null;
+
+const escapeCsvCell = (val) => {
+  const s = String(val ?? '');
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+};
+
 const OrderAssignManagement = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [timeFilter, setTimeFilter] = useState('All Time');
+  const [showTimeFilter, setShowTimeFilter] = useState(false);
+  const timeFilterRef = useRef(null);
+  const timeFilterOptions = ['All Time', 'Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'This Month', 'Last Month'];
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -87,15 +164,57 @@ const OrderAssignManagement = () => {
     { label: 'Delivered', value: orders.filter(o => o.order_status === 'delivered').length.toString(), bgColor: 'bg-[#0D7C66]', textColor: 'text-white' },
   ];
 
-  // Filter orders based on search query
-  const filteredOrders = orders.filter(order => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      order.order_id.toLowerCase().includes(query) ||
-      order.customer_name.toLowerCase().includes(query)
+  const filteredOrders = useMemo(() => {
+    let filtered = filterByDateRange([...orders], timeFilter, (o) => getAssignOrderFilterDate(o));
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (order) =>
+          String(order.order_id || '').toLowerCase().includes(query) ||
+          String(order.customer_name || '').toLowerCase().includes(query)
+      );
+    }
+    return filtered;
+  }, [orders, searchQuery, timeFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, timeFilter]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showTimeFilter && !timeFilterRef.current?.contains(event.target)) {
+        setShowTimeFilter(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showTimeFilter]);
+
+  const handleExport = () => {
+    const rows = [];
+    rows.push(
+      ['Order ID', 'Customer', 'Order Type', 'Order Received Date', 'Status'].map(escapeCsvCell).join(',')
     );
-  });
+    filteredOrders.forEach((order) => {
+      rows.push(
+        [
+          order.order_id,
+          order.customer_name,
+          order.order_type || '',
+          order.order_received_date || '',
+          order.order_status || ''
+        ].map(escapeCsvCell).join(',')
+      );
+    });
+    const csv = rows.join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `order-assign-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const itemsPerPage = 7;
   const totalPages = Math.max(1, Math.ceil(filteredOrders.length / itemsPerPage));
@@ -144,45 +263,54 @@ const OrderAssignManagement = () => {
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
 
-      {/* Search and Filters */}
-      <div className="mb-6 flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-        <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto flex-1">
-          {/* Search */}
-          <div className="relative flex-1 lg:w-80">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="Search by order ID, customer..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-            />
-          </div>
-
-          {/* Filters */}
-          <div className="flex gap-3 flex-wrap sm:flex-nowrap">
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap">
-              <span className="text-sm font-medium text-gray-700">All Time</span>
-              <ChevronRight className="w-4 h-4 text-gray-600" />
-            </button>
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap">
-              <span className="text-sm font-medium text-gray-700">All Status</span>
-              <ChevronRight className="w-4 h-4 text-gray-600" />
-            </button>
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap">
-              <span className="text-sm font-medium text-gray-700">Product Type</span>
-              <ChevronRight className="w-4 h-4 text-gray-600" />
-            </button>
-          </div>
+      {/* Search and Filters — aligned with Order Management */}
+      <div className="flex flex-col lg:flex-row gap-4 mb-6">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+          <input
+            type="text"
+            placeholder="Search by order ID, customer..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0D7C66] focus:border-transparent"
+          />
         </div>
-
-        {/* Export Button */}
-        <button className="px-6 py-2.5 border-2 border-emerald-600 text-emerald-600 rounded-lg hover:bg-emerald-50 transition-colors font-medium whitespace-nowrap">
-          Export
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <div className="relative" ref={timeFilterRef}>
+            <button
+              type="button"
+              onClick={() => setShowTimeFilter(!showTimeFilter)}
+              className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors duration-200"
+            >
+              <span className="text-gray-700">{timeFilter}</span>
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            </button>
+            {showTimeFilter && (
+              <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                {timeFilterOptions.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => {
+                      setTimeFilter(option);
+                      setShowTimeFilter(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleExport}
+            className="px-6 py-2.5 border border-[#0D7C66] text-[#0D7C66] rounded-lg hover:bg-[#0D7C66] hover:text-white transition-colors duration-200 font-medium"
+          >
+            Export
+          </button>
+        </div>
       </div>
 
       {/* Stats Cards */}

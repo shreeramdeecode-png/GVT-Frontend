@@ -75,6 +75,12 @@ const escapeCsvCell = (val) => {
   return s;
 };
 
+/** Sum order line weights and format without floating-point noise in the UI */
+const formatKgTotal = (items, field) => {
+  const sum = (items || []).reduce((acc, item) => acc + (parseFloat(item[field]) || 0), 0);
+  return `${sum.toFixed(2)} kg`;
+};
+
 /** First usable date for filtering (API may use camelCase or snake_case). Prefer business received date. */
 const getOrderFilterDate = (o) =>
   o.orderReceivedDate ?? o.createdAt ?? o.updatedAt ?? o.created_at ?? o.updated_at ?? null;
@@ -82,25 +88,15 @@ const getOrderFilterDate = (o) =>
 const getDraftFilterDate = (d) =>
   d.createdAt ?? d.updatedAt ?? d.created_at ?? d.updated_at ?? null;
 
-const normalizeStatusKey = (s) =>
-  String(s ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '')
-    .replace(/_/g, '');
-
 const OrderManagement = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [timeFilter, setTimeFilter] = useState('All Time');
-  const [statusFilter, setStatusFilter] = useState('All Status');
   const [showTimeFilter, setShowTimeFilter] = useState(false);
-  const [showStatusFilter, setShowStatusFilter] = useState(false);
 
   // Filter options
   const timeFilterOptions = ['All Time', 'Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'This Month', 'Last Month'];
-  const statusFilterOptions = ['All Status', 'Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
   const [orders, setOrders] = useState([]); // State for orders
   const [drafts, setDrafts] = useState([]); // State for drafts
   const [activeTab, setActiveTab] = useState(() => {
@@ -114,7 +110,6 @@ const OrderManagement = () => {
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const dropdownRef = useRef(null);
   const timeFilterRef = useRef(null);
-  const statusFilterRef = useRef(null);
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, orderId: null });
   const [deleteDraftModal, setDeleteDraftModal] = useState({ isOpen: false, draftId: null });
 
@@ -136,8 +131,8 @@ const OrderManagement = () => {
               return sum + numBoxes;
             }, 0),
             packing: order.items.map(item => item.packing_type).filter(Boolean)[0] || 'N/A',
-            netWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.net_weight) || 0), 0) + ' kg',
-            grossWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.gross_weight) || 0), 0) + ' kg',
+            netWeight: formatKgTotal(order.items, 'net_weight'),
+            grossWeight: formatKgTotal(order.items, 'gross_weight'),
             order_type: order.order_type,
             status: order.order_status || 'pending',
             products: order.items.map(item => item.product).filter(Boolean),
@@ -255,13 +250,8 @@ const OrderManagement = () => {
       );
     }
 
-    if (statusFilter !== 'All Status') {
-      const wanted = normalizeStatusKey(statusFilter);
-      filtered = filtered.filter(order => normalizeStatusKey(order.status) === wanted);
-    }
-
     return filtered;
-  }, [orders, searchQuery, statusFilter, timeFilter]);
+  }, [orders, searchQuery, timeFilter]);
 
   const filteredDrafts = useMemo(() => {
     let filtered = [...drafts];
@@ -281,7 +271,7 @@ const OrderManagement = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter, timeFilter, activeTab]);
+  }, [searchQuery, timeFilter, activeTab]);
 
   const handleExport = () => {
     const rows = [];
@@ -336,19 +326,17 @@ const OrderManagement = () => {
       }
 
       // Close filter dropdowns when clicking outside (menu is sibling of toggle, not inside [data-filter])
-      if (showTimeFilter || showStatusFilter) {
+      if (showTimeFilter) {
         const insideTime = timeFilterRef.current?.contains(event.target);
-        const insideStatus = statusFilterRef.current?.contains(event.target);
-        if (!insideTime && !insideStatus) {
+        if (!insideTime) {
           setShowTimeFilter(false);
-          setShowStatusFilter(false);
         }
       }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showTimeFilter, showStatusFilter]);
+  }, [showTimeFilter]);
 
   const toggleDropdown = (orderId, event) => {
     if (openDropdown === orderId) {
@@ -379,8 +367,8 @@ const OrderManagement = () => {
             return sum + numBoxes;
           }, 0),
           packing: order.items.map(item => item.packing_type).filter(Boolean)[0] || 'N/A',
-          netWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.net_weight) || 0), 0) + ' kg',
-          grossWeight: order.items.reduce((sum, item) => sum + (parseFloat(item.gross_weight) || 0), 0) + ' kg',
+          netWeight: formatKgTotal(order.items, 'net_weight'),
+          grossWeight: formatKgTotal(order.items, 'gross_weight'),
           order_type: order.order_type,
           status: order.order_status || 'pending',
           products: order.items.map(item => item.product).filter(Boolean),
@@ -508,10 +496,7 @@ const OrderManagement = () => {
               <button
                 type="button"
                 data-filter="time"
-                onClick={() => {
-                  setShowTimeFilter(!showTimeFilter);
-                  setShowStatusFilter(false);
-                }}
+                onClick={() => setShowTimeFilter(!showTimeFilter)}
                 className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors duration-200"
               >
                 <span className="text-gray-700">{timeFilter}</span>
@@ -535,41 +520,6 @@ const OrderManagement = () => {
                 </div>
               )}
             </div>
-
-            {/* Status Filter Dropdown */}
-            <div className="relative" ref={statusFilterRef}>
-              <button
-                type="button"
-                data-filter="status"
-                onClick={() => {
-                  setShowStatusFilter(!showStatusFilter);
-                  setShowTimeFilter(false);
-                }}
-                className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors duration-200"
-              >
-                <span className="text-gray-700">{statusFilter}</span>
-                <ChevronDown className="w-4 h-4 text-gray-500" />
-              </button>
-
-              {showStatusFilter && (
-                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-                  {statusFilterOptions.map((option) => (
-                    <button
-                      key={option}
-                      onClick={() => {
-                        setStatusFilter(option);
-                        setShowStatusFilter(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-
 
             <button
               type="button"

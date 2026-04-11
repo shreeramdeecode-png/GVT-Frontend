@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, MoreVertical, Eye, Edit, Trash2, Download } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllThirdParties } from '../../../api/thirdPartyApi';
 import { getAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
 import * as XLSX from 'xlsx-js-style';
 
 const ThirdPartyManagement = () => {
@@ -22,6 +23,21 @@ const ThirdPartyManagement = () => {
   const [currentPage, setCurrentPage] = useState(pageFromUrl);
   const [searchQuery, setSearchQuery] = useState('');
   const itemsPerPage = 7;
+  const [payoutStats, setPayoutStats] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getOrderEntityPayoutAmounts('third_party')
+      .then((s) => {
+        if (!cancelled) setPayoutStats(s);
+      })
+      .catch(() => {
+        if (!cancelled) setPayoutStats({ pendingAmount: 0, paidThisMonthAmount: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setCurrentPage(pageFromUrl);
@@ -211,20 +227,43 @@ const ThirdPartyManagement = () => {
     }));
   };
 
-  // Calculate statistics based on fetched data
-  const calculateStats = (data) => {
-    if (!data || data.length === 0) return [];
+  const stats = useMemo(() => {
+    const data = thirdParties;
+    if (!data || data.length === 0) {
+      return [
+        { label: 'Total Third Party', value: '0', change: '', color: 'bg-gradient-to-r from-[#D1FAE5] to-[#A7F3D0]' },
+        { label: 'Active Third Party', value: '0', change: '', color: 'bg-gradient-to-r from-[#6EE7B7] to-[#34D399]' },
+        {
+          label: 'Pending Payouts',
+          value: payoutStats == null ? '…' : formatInrPayout(payoutStats.pendingAmount),
+          color: 'bg-gradient-to-r from-[#10B981] to-[#059669]'
+        },
+        {
+          label: 'Total Paid (Month)',
+          value: payoutStats == null ? '…' : formatInrPayout(payoutStats.paidThisMonthAmount),
+          color: 'bg-gradient-to-r from-[#047857] to-[#065F46]'
+        }
+      ];
+    }
 
-    const activeCount = data.filter(tp => tp.status === 'active').length;
+    const activeCount = data.filter((tp) => tp.status === 'active').length;
     const totalCount = data.length;
 
     return [
       { label: 'Total Third Party', value: totalCount.toString(), change: '', color: 'bg-gradient-to-r from-[#D1FAE5] to-[#A7F3D0]' },
       { label: 'Active Third Party', value: activeCount.toString(), change: '', color: 'bg-gradient-to-r from-[#6EE7B7] to-[#34D399]' },
-      { label: 'Pending Payouts', value: '₹12.4 L', color: 'bg-gradient-to-r from-[#10B981] to-[#059669]' },
-      { label: 'Total Paid (Month)', value: '₹2.8 L', color: 'bg-gradient-to-r from-[#047857] to-[#065F46]' }
+      {
+        label: 'Pending Payouts',
+        value: payoutStats == null ? '…' : formatInrPayout(payoutStats.pendingAmount),
+        color: 'bg-gradient-to-r from-[#10B981] to-[#059669]'
+      },
+      {
+        label: 'Total Paid (Month)',
+        value: payoutStats == null ? '…' : formatInrPayout(payoutStats.paidThisMonthAmount),
+        color: 'bg-gradient-to-r from-[#047857] to-[#065F46]'
+      }
     ];
-  };
+  }, [thirdParties, payoutStats]);
 
   const transformedThirdParties = transformThirdPartiesData(thirdParties);
 
@@ -245,8 +284,6 @@ const ThirdPartyManagement = () => {
       setPage(totalPages);
     }
   }, [loading, error, currentPage, totalPages, setPage]);
-
-  const stats = calculateStats(thirdParties);
 
   // Show loading state
   if (loading) {
