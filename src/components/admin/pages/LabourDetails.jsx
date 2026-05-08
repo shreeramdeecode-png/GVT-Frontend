@@ -4,6 +4,20 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getLabourById } from '../../../api/labourApi';
 import { BASE_URL } from '../../../config/config';
 
+const getStatusMeta = (status) => {
+  const raw = String(status || '').trim().toLowerCase();
+  if (raw === 'live' || raw === 'active' || raw === 'present') {
+    return { text: 'Live', className: 'bg-green-50 text-green-700 border-green-200', dot: 'bg-green-500' };
+  }
+  if (raw === 'terminated') {
+    return { text: 'Terminated', className: 'bg-red-50 text-red-700 border-red-200', dot: 'bg-red-500' };
+  }
+  if (raw === 'relieved' || raw === 'relived' || raw === 'inactive' || raw === 'absent') {
+    return { text: 'Relieved', className: 'bg-orange-50 text-orange-700 border-orange-200', dot: 'bg-orange-500' };
+  }
+  return { text: status || 'Unknown', className: 'bg-orange-50 text-orange-700 border-orange-200', dot: 'bg-orange-500' };
+};
+
 const LabourDetails = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -55,6 +69,7 @@ const LabourDetails = () => {
       </div>
     );
   }
+  const statusMeta = getStatusMeta(labour?.status);
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 lg:p-8">
@@ -128,16 +143,9 @@ const LabourDetails = () => {
             <span className="bg-teal-50 text-teal-700 px-4 py-1 rounded-full text-sm font-medium border border-teal-200">
               {labour?.department || 'Worker'}
             </span>
-            <span className={`px-4 py-1 rounded-full text-sm font-medium border flex items-center gap-2 ${labour?.status === 'Present'
-                ? 'bg-green-50 text-green-700 border-green-200'
-                : labour?.status === 'Absent'
-                  ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-orange-50 text-orange-700 border-orange-200'
-              }`}>
-              <span className={`w-2 h-2 rounded-full ${labour?.status === 'Present' ? 'bg-green-500' :
-                  labour?.status === 'Absent' ? 'bg-red-500' : 'bg-orange-500'
-                }`}></span>
-              {labour?.status || 'Unknown'}
+            <span className={`px-4 py-1 rounded-full text-sm font-medium border flex items-center gap-2 ${statusMeta.className}`}>
+              <span className={`w-2 h-2 rounded-full ${statusMeta.dot}`}></span>
+              {statusMeta.text}
             </span>
           </div>
         </div>

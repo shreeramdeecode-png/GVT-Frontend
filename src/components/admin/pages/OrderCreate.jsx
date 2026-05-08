@@ -629,6 +629,25 @@ const NewOrder = () => {
     return match ? parseFloat(match[1]) : 0;
   };
 
+  const getDuplicateProductNames = (productsList) => {
+    const counts = new Map();
+    productsList.forEach((product) => {
+      const productId = String(product.productId || '').trim();
+      if (!productId) return;
+      counts.set(productId, (counts.get(productId) || 0) + 1);
+    });
+
+    const duplicateNames = [];
+    counts.forEach((count, productId) => {
+      if (count > 1) {
+        const matched = allProducts.find((p) => String(p.pid) === productId);
+        duplicateNames.push(matched?.product_name || `Product ID ${productId}`);
+      }
+    });
+
+    return duplicateNames;
+  };
+
   const handleProductChange = (id, field, value) => {
     setProducts((prev) =>
       prev.map((product) => {
@@ -790,16 +809,11 @@ const NewOrder = () => {
   const selectProductSuggestion = (id, product) => {
     // Check if product is already selected in other rows
     const isDuplicate = products.some(p => p.id !== id && p.productId === product.pid.toString());
-    
+
     if (isDuplicate) {
-      const confirmAdd = window.confirm(
-        `"${product.product_name}" is already added to this order.\n\nDo you want to add it again?`
-      );
-      
-      if (!confirmAdd) {
-        setShowProductSuggestions(prev => ({ ...prev, [id]: false }));
-        return;
-      }
+      alert(`"${product.product_name}" is already added to this order. Duplicate products are not allowed.`);
+      setShowProductSuggestions(prev => ({ ...prev, [id]: false }));
+      return;
     }
 
     // Parse the product's packing_type field to get allowed packing types
@@ -924,6 +938,11 @@ const NewOrder = () => {
 
     if (invalidProducts.length > 0) {
       newErrors.products = 'Please select products from the dropdown. Type the product name and click on a suggestion.';
+    }
+
+    const duplicateProductNames = getDuplicateProductNames(products);
+    if (duplicateProductNames.length > 0) {
+      newErrors.products = `Duplicate products are not allowed: ${duplicateProductNames.join(', ')}`;
     }
 
     setErrors(newErrors);

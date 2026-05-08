@@ -23,7 +23,7 @@ const AddLabour = () => {
     branchName: '',
     accountNumber: '',
     ifscCode: '',
-    status: 'Active'
+    status: 'Live'
   });
 
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -71,7 +71,7 @@ const AddLabour = () => {
       if (formData.branchName) formDataToSend.append('branch_name', formData.branchName);
       if (formData.accountNumber) formDataToSend.append('account_number', formData.accountNumber);
       if (formData.ifscCode) formDataToSend.append('IFSC_code', formData.ifscCode);
-      formDataToSend.append('status', formData.status === 'Inactive' ? 'InActive' : formData.status);
+      formDataToSend.append('status', formData.status);
       
       if (profileImage) formDataToSend.append('profile_image', profileImage);
       
@@ -405,8 +405,9 @@ const AddLabour = () => {
                     className="w-full px-4 py-2.5 bg-white border border-[#D0E0DB] rounded-lg text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] focus:border-transparent appearance-none cursor-pointer"
                     required
                   >
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
+                    <option value="Live">Live</option>
+                    <option value="Terminated">Terminated</option>
+                    <option value="Relieved">Relieved</option>
                   </select>
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
                     <svg className="w-4 h-4 text-[#6B8782]" fill="none" stroke="currentColor" viewBox="0 0 24 24">

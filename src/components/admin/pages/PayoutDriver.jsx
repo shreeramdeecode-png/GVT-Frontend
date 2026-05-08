@@ -9,8 +9,11 @@ import { getAllFuelExpenses } from '../../../api/fuelExpenseApi';
 import { getAllExcessKMs } from '../../../api/excessKmApi';
 import { getAllAdvancePays } from '../../../api/advancePayApi';
 import { getAttendanceOverview } from '../../../api/driverAttendanceApi';
-import { getPaidRecords, markAsPaid } from '../../../api/payoutApi';
-import { getPaidRecords as getDailyPaidRecords, markAsPaid as markDailyAsPaid } from '../../../api/dailyPayoutsApi';
+import { getPaidRecords, markAsPaid, markPartialPaid } from '../../../api/payoutApi';
+import {
+  getPaidRecords as getDailyPaidRecords,
+  markAsPaid as markDailyAsPaid
+} from '../../../api/dailyPayoutsApi';
 import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -28,6 +31,58 @@ const toDateStr = (val) => {
   }
 };
 
+const parseRowData = (paymentRecord) => {
+  const raw = paymentRecord?.row_data;
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return raw;
+};
+
+const getPartialPaidAmount = (paymentRecord) => {
+  const rowData = parseRowData(paymentRecord);
+  const paymentStatus = String(
+    rowData?.paymentStatus ||
+    rowData?.status ||
+    paymentRecord?.payment_status ||
+    paymentRecord?.status ||
+    ''
+  ).toLowerCase();
+  const isPartialByStatus = paymentStatus === 'partial';
+  return Number(
+    rowData?.partialPaidAmount ??
+    rowData?.partial_amount ??
+    paymentRecord?.partialPaidAmount ??
+    paymentRecord?.partial_amount ??
+    paymentRecord?.paid_amount ??
+    (isPartialByStatus ? rowData?.amount : 0) ??
+    (isPartialByStatus ? paymentRecord?.amount : 0) ??
+    0
+  ) || 0;
+};
+
+const getPayoutStatus = ({ paymentRecord, key, paidSet, totalPayout }) => {
+  const rowData = parseRowData(paymentRecord);
+  const paymentStatus = String(
+    rowData?.paymentStatus ||
+    rowData?.status ||
+    paymentRecord?.payment_status ||
+    paymentRecord?.status ||
+    ''
+  ).toLowerCase();
+  const partialPaidAmount = getPartialPaidAmount(paymentRecord);
+  const hasPartialAmount = partialPaidAmount > 0 && partialPaidAmount < (Number(totalPayout) || 0);
+  if (paymentStatus === 'paid') return 'Paid';
+  if (paymentStatus === 'partial') return 'Partial';
+  if (!paymentStatus && hasPartialAmount) return 'Partial';
+  return paidSet.has(key) ? 'Paid' : 'Pending';
+};
+
 const DriverPayoutManagement = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,6 +95,9 @@ const DriverPayoutManagement = () => {
   const [loading, setLoading] = useState(true);
   const [payouts, setPayouts] = useState([]);
   const [markingPaid, setMarkingPaid] = useState(false);
+  const [partialModal, setPartialModal] = useState({ open: false, payout: null });
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialNote, setPartialNote] = useState('');
   const [paidKeys, setPaidKeys] = useState(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_ALL);
@@ -470,9 +528,10 @@ const DriverPayoutManagement = () => {
       });
 
       const toDriverPaidKey = (item) => {
-        const refKey = item?.reference_key ?? item?.key ?? (typeof item === 'string' ? item : null);
-        const datePart = item?.date ?? item?.reference_date ?? refKey;
-        const entityId = item?.entity_id;
+        const rowData = parseRowData(item);
+        const refKey = item?.reference_key ?? item?.key ?? rowData?.key ?? (typeof item === 'string' ? item : null);
+        const datePart = item?.date ?? item?.reference_date ?? rowData?.date ?? refKey;
+        const entityId = item?.entity_id ?? rowData?.entity_id ?? rowData?.driverId;
         if (refKey && refKey.includes('_')) return refKey;
         if (datePart && entityId != null && entityId !== '') return `${datePart}_${entityId}`;
         if (refKey) return refKey;
@@ -481,16 +540,23 @@ const DriverPayoutManagement = () => {
       };
 
       let paidSet = new Set();
+      const paidRecordMap = {};
       try {
         const paidList = paidRes?.data ?? paidRes?.paidRecords ?? paidRes?.records ?? (Array.isArray(paidRes) ? paidRes : []);
         paidList.forEach((item) => {
           const k = toDriverPaidKey(item);
-          if (k) paidSet.add(k);
+          if (k) {
+            paidSet.add(k);
+            paidRecordMap[k] = item;
+          }
         });
         const dailyPaidList = dailyPaidMerged;
         dailyPaidList.forEach((item) => {
           const k = toDriverPaidKey(item);
-          if (k) paidSet.add(k);
+          if (k) {
+            paidSet.add(k);
+            if (!paidRecordMap[k]) paidRecordMap[k] = item;
+          }
         });
         const stored = localStorage.getItem(STORAGE_KEY_ALL);
         if (stored) JSON.parse(stored).forEach((k) => paidSet.add(k));
@@ -575,8 +641,11 @@ const DriverPayoutManagement = () => {
             }
 
             const key = `${dateStr}_${driverId}`;
-            const status = paidSet.has(key) ? 'Paid' : 'Pending';
+            const paymentRecord = paidRecordMap[key];
             const totalPayout = basePay - fuel - advancePay + excessKMPrice;
+            const status = getPayoutStatus({ paymentRecord, key, paidSet, totalPayout });
+            const partialPaidAmount = getPartialPaidAmount(paymentRecord);
+            const remainingAmount = status === 'Partial' ? Math.max(totalPayout - partialPaidAmount, 0) : 0;
 
             allRows.push({
               key,
@@ -593,7 +662,10 @@ const DriverPayoutManagement = () => {
               excessKMPrice,
               advancePay,
               totalPayout,
-              status
+              status,
+              partialPaidAmount,
+              remainingAmount,
+              paymentNote: paymentRecord?.row_data?.paymentNote || ''
             });
           });
       });
@@ -643,6 +715,10 @@ const DriverPayoutManagement = () => {
             excessKMPrice = excessDistanceKM * unitPrice;
           }
           const totalPayout = driverRate - fuel - advancePay + excessKMPrice;
+          const paymentRecord = paidRecordMap[key];
+          const status = getPayoutStatus({ paymentRecord, key, paidSet, totalPayout });
+          const partialPaidAmount = getPartialPaidAmount(paymentRecord);
+          const remainingAmount = status === 'Partial' ? Math.max(totalPayout - partialPaidAmount, 0) : 0;
           allRows.push({
             key,
             driverId,
@@ -658,7 +734,10 @@ const DriverPayoutManagement = () => {
             excessKMPrice,
             advancePay,
             totalPayout,
-            status: paidSet.has(key) ? 'Paid' : 'Pending'
+            status,
+            partialPaidAmount,
+            remainingAmount,
+            paymentNote: paymentRecord?.row_data?.paymentNote || ''
           });
         });
       }
@@ -682,7 +761,10 @@ const DriverPayoutManagement = () => {
     try {
       setMarkingPaid(true);
       const rowData = {
+        ...payout,
         key: payout.key,
+        id: payout.key,
+        reference_key: payout.key,
         entity_id: payout.driverId,
         date: payout.date,
         driverId: payout.driverId,
@@ -694,13 +776,23 @@ const DriverPayoutManagement = () => {
         excessKMPrice: payout.excessKMPrice,
         totalPayout: payout.totalPayout,
         amount: Number(payout.totalPayout) || 0,
+        partial_amount: 0,
+        partialPaidAmount: 0,
+        remainingAmount: 0,
+        paymentNote: '',
+        paymentStatus: 'Paid',
         status: 'Paid',
-        ...payout
       };
       await markAsPaid('driver', rowData);
       await markDailyAsPaid('driver', rowData).catch(() => {});
       setPaidKeys((prev) => new Set([...prev, key]));
-      setPayouts((prev) => prev.map((p) => (p.key === key ? { ...p, status: 'Paid' } : p)));
+      setPayouts((prev) =>
+        prev.map((p) =>
+          p.key === key
+            ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0, paymentNote: '' }
+            : p
+        )
+      );
       const idx = key.indexOf('_');
       const driverId = key.substring(idx + 1);
       if (driverId) {
@@ -725,6 +817,74 @@ const DriverPayoutManagement = () => {
     } catch (error) {
       console.error('Error marking driver payout as paid:', error);
       alert(error?.message || error?.error || 'Failed to mark as paid');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const openPartialPaymentModal = (payout) => {
+    setPartialAmount('');
+    setPartialNote('');
+    setPartialModal({ open: true, payout });
+  };
+
+  const closePartialPaymentModal = () => {
+    setPartialModal({ open: false, payout: null });
+    setPartialAmount('');
+    setPartialNote('');
+  };
+
+  const handlePartialPay = async () => {
+    if (!partialModal.payout) return;
+    const payout = partialModal.payout;
+    const alreadyPaid = Number(payout.partialPaidAmount || 0);
+    const totalPayout = Number(payout.totalPayout || 0);
+    const entered = Number(partialAmount);
+    if (!Number.isFinite(entered) || entered <= 0) {
+      alert('Enter a valid partial amount');
+      return;
+    }
+    const cumulativePaid = alreadyPaid + entered;
+    if (totalPayout > 0 && cumulativePaid >= totalPayout) {
+      alert('Total partial paid amount should be less than total payout');
+      return;
+    }
+    try {
+      setMarkingPaid(true);
+      const rowData = {
+        key: payout.key,
+        id: payout.key,
+        reference_key: payout.key,
+        entity_id: payout.driverId,
+        date: payout.date,
+        driverId: payout.driverId,
+        driverName: payout.driverName,
+        driverCode: payout.driverCode,
+        totalPayout,
+        amount: totalPayout,
+        partial_amount: entered,
+        partial_paid_total: cumulativePaid,
+        previous_partial_amount: alreadyPaid,
+        note: partialNote
+      };
+      await markPartialPaid('driver', rowData);
+      setPayouts((prev) =>
+        prev.map((p) =>
+          p.key === payout.key
+            ? {
+                ...p,
+                status: 'Partial',
+                partialPaidAmount: cumulativePaid,
+                remainingAmount: Math.max((Number(p.totalPayout) || 0) - cumulativePaid, 0),
+                paymentNote: partialNote
+              }
+            : p
+        )
+      );
+      closePartialPaymentModal();
+    } catch (error) {
+      console.error('Error marking driver payout as partial:', error);
+      alert(error?.message || error?.error || 'Failed to save partial payment');
     } finally {
       setMarkingPaid(false);
     }
@@ -845,6 +1005,9 @@ const DriverPayoutManagement = () => {
   const getStatusColor = (status) => {
     if (status === 'Paid') {
       return 'bg-emerald-100 text-emerald-700';
+    }
+    if (status === 'Partial') {
+      return 'bg-blue-100 text-blue-700';
     }
     return 'bg-yellow-100 text-yellow-700';
   };
@@ -1061,8 +1224,13 @@ const DriverPayoutManagement = () => {
                         <span className={`inline-block px-4 py-1.5 rounded-full text-xs font-medium ${getStatusColor(payout.status)}`}>
                           {payout.status}
                         </span>
+                        {payout.status === 'Partial' && (
+                          <div className="mt-1 text-[11px] text-[#0D5C4D]">
+                            Paid ₹{formatNum(payout.partialPaidAmount || 0)} | Bal ₹{formatNum(payout.remainingAmount || 0)}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-6 py-4 flex gap-2 items-center">
+                      <td className="px-6 py-4 flex gap-2 items-center mt-4">
                         <button
                           type="button"
                           onClick={() => navigate(`/drivers/${payout.driverId}/daily-payout`)}
@@ -1070,18 +1238,28 @@ const DriverPayoutManagement = () => {
                         >
                           View
                         </button>
-                        {payout.status === 'Pending' ? (
-                          <button
-                            type="button"
-                            onClick={() => handlePay(payout)}
-                            disabled={markingPaid}
-                            className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
-                          >
-                            {markingPaid ? 'Saving...' : 'Pay'}
-                          </button>
+                        {payout.status !== 'Paid' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openPartialPaymentModal(payout)}
+                              disabled={markingPaid}
+                              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                            >
+                              Partial
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handlePay(payout)}
+                              disabled={markingPaid}
+                              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                            >
+                              {markingPaid ? 'Saving...' : 'Pay'}
+                            </button>
+                          </>
                         ) : (
                           <span className="px-4 py-1.5 rounded-lg text-xs font-medium bg-gray-200 text-gray-700">
-                            Paid
+                            {payout.status}
                           </span>
                         )}
                       </td>
@@ -1144,6 +1322,57 @@ const DriverPayoutManagement = () => {
             </div>
           </div>
         </div>
+        {partialModal.open && partialModal.payout && (
+          <div className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white rounded-xl border border-[#D0E0DB] shadow-xl p-5">
+              <h3 className="text-lg font-semibold text-[#0D5C4D] mb-1">Partial Payment</h3>
+              <p className="text-sm text-[#6B8782] mb-4">
+                {partialModal.payout.driverName} ({partialModal.payout.driverCode}) - Total: ₹{formatNum(partialModal.payout.totalPayout)}
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-[#6B8782] mb-1">Partial Amount</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    value={partialAmount}
+                    onChange={(e) => setPartialAmount(e.target.value)}
+                    placeholder="Enter amount"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[#6B8782] mb-1">Note (optional)</label>
+                  <textarea
+                    rows={3}
+                    value={partialNote}
+                    onChange={(e) => setPartialNote(e.target.value)}
+                    placeholder="Reason / remark"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 mt-5">
+                <button
+                  type="button"
+                  onClick={closePartialPaymentModal}
+                  className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePartialPay}
+                  disabled={markingPaid}
+                  className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                >
+                  {markingPaid ? 'Saving...' : 'Save Partial'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 };

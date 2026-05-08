@@ -7,8 +7,12 @@ import { getAllLabours } from '../../../api/labourApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllAttendance } from '../../../api/labourAttendanceApi';
-import { getPaidRecords, markAsPaid } from '../../../api/payoutApi';
-import { getPaidRecords as getDailyPaidRecords, markAsPaid as markDailyAsPaid } from '../../../api/dailyPayoutsApi';
+import { getPaidRecords, markAsPaid, unmarkAsPaid } from '../../../api/payoutApi';
+import {
+  getPaidRecords as getDailyPaidRecords,
+  markAsPaid as markDailyAsPaid,
+  unmarkAsPaid as unmarkDailyAsPaid
+} from '../../../api/dailyPayoutsApi';
 import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -37,7 +41,7 @@ const LabourPayoutManagement = () => {
 
   const [loading, setLoading] = useState(true);
   const [payoutData, setPayoutData] = useState([]);
-  const [markingPaid, setMarkingPaid] = useState(false);
+  const [processingKey, setProcessingKey] = useState('');
   const [paidKeys, setPaidKeys] = useState(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_ALL);
@@ -245,7 +249,7 @@ const LabourPayoutManagement = () => {
   const handlePay = async (payout) => {
     const key = payout.key;
     try {
-      setMarkingPaid(true);
+      setProcessingKey(key);
       const rowData = {
         key: payout.key,
         entity_id: payout.labourId,
@@ -288,7 +292,55 @@ const LabourPayoutManagement = () => {
       console.error('Error marking labour payout as paid:', error);
       alert(error?.message || error?.error || 'Failed to mark as paid');
     } finally {
-      setMarkingPaid(false);
+      setProcessingKey('');
+    }
+  };
+
+  const handleRevert = async (payout) => {
+    const key = payout.key;
+    try {
+      setProcessingKey(key);
+      const rowData = {
+        key: payout.key,
+        id: payout.key,
+        reference_key: payout.key,
+        entity_id: payout.labourId,
+        date: payout.date
+      };
+      await unmarkAsPaid('labour', rowData);
+      await unmarkDailyAsPaid('labour', rowData).catch(() => {});
+
+      setPaidKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setPayoutData((prev) => prev.map((p) => (p.key === key ? { ...p, status: 'Pending' } : p)));
+
+      try {
+        const [, lid] = key.split('_');
+        if (lid) {
+          const sk = `labour-daily-paid-${lid}`;
+          const stored = localStorage.getItem(sk);
+          const list = stored ? JSON.parse(stored) : [];
+          localStorage.setItem(sk, JSON.stringify(list.filter((k) => k !== key)));
+        }
+      } catch {
+        // ignore
+      }
+
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_ALL);
+        const list = stored ? JSON.parse(stored) : [];
+        localStorage.setItem(STORAGE_KEY_ALL, JSON.stringify(list.filter((k) => k !== key)));
+      } catch {
+        // ignore
+      }
+    } catch (error) {
+      console.error('Error reverting labour payout:', error);
+      alert(error?.message || error?.error || 'Failed to revert paid status');
+    } finally {
+      setProcessingKey('');
     }
   };
 
@@ -656,13 +708,19 @@ const LabourPayoutManagement = () => {
                       {payout.status === 'Pending' ? (
                         <button
                           onClick={() => payout.status === 'Pending' ? handlePay(payout) : undefined}
-                          disabled={markingPaid && payout.status === 'Pending'}
+                          disabled={processingKey === payout.key}
                           className="px-4 py-2 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors disabled:opacity-50"
                         >
-                          {markingPaid ? 'Saving...' : 'Pay'}
+                          {processingKey === payout.key ? 'Saving...' : 'Pay'}
                         </button>
                       ) : (
-                        <span className="text-xs text-gray-500 font-medium">Paid</span>
+                        <button
+                          onClick={() => handleRevert(payout)}
+                          disabled={processingKey === payout.key}
+                          className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 transition-colors disabled:opacity-50"
+                        >
+                          {processingKey === payout.key ? 'Saving...' : 'Revert'}
+                        </button>
                       )}
                     </td>
                   </tr>

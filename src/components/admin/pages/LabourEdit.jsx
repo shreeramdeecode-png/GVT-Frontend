@@ -12,6 +12,13 @@ const normalizePhoneWithCountryCode = (value) => {
   if (digits.length === 10) return `+91 ${digits}`;
   return raw;
 };
+const normalizeLabourStatus = (status) => {
+  const raw = String(status || '').trim().toLowerCase();
+  if (raw === 'active' || raw === 'live') return 'Live';
+  if (raw === 'terminated') return 'Terminated';
+  if (raw === 'relieved' || raw === 'relived' || raw === 'inactive') return 'Relieved';
+  return 'Live';
+};
 
 const EditLabour = () => {
   const navigate = useNavigate();
@@ -74,7 +81,7 @@ const EditLabour = () => {
           branchName: data.branch_name || '',
           accountNumber: data.account_number || '',
           ifscCode: data.IFSC_code || '',
-          status: data.status === 'InActive' ? 'Inactive' : data.status
+          status: normalizeLabourStatus(data.status)
         });
         if (data.profile_image) {
           setPhotoPreview(`${BASE_URL}${data.profile_image}`);
@@ -119,7 +126,7 @@ const EditLabour = () => {
       if (formData.branchName) formDataToSend.append('branch_name', formData.branchName);
       if (formData.accountNumber) formDataToSend.append('account_number', formData.accountNumber);
       if (formData.ifscCode) formDataToSend.append('IFSC_code', formData.ifscCode);
-      formDataToSend.append('status', formData.status === 'Inactive' ? 'InActive' : formData.status);
+      formDataToSend.append('status', formData.status);
       
       if (profileImage) formDataToSend.append('profile_image', profileImage);
       
@@ -447,8 +454,9 @@ const EditLabour = () => {
                     className="w-full px-4 py-2.5 bg-white border border-[#D0E0DB] rounded-lg text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] focus:border-transparent appearance-none cursor-pointer"
                     required
                   >
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
+                    <option value="Live">Live</option>
+                    <option value="Terminated">Terminated</option>
+                    <option value="Relieved">Relieved</option>
                   </select>
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
                     <svg className="w-4 h-4 text-[#6B8782]" fill="none" stroke="currentColor" viewBox="0 0 24 24">

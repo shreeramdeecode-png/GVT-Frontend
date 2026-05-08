@@ -449,8 +449,16 @@ const FlowerOrderAssignStage3 = () => {
               const totalBoxes = parseNumBoxes(item.num_boxes);
               const labourNames = stage2LabourMap[item.oiid] || '-';
               const netWeight = parseFloat(item.net_weight) || 0;
-              const boxWeight = totalBoxes * 0.5;
-              const grossWeight = netWeight + boxWeight;
+              const boxWeightPerBox = parseFloat(item.box_weight) || 0;
+              const orderGross = parseFloat(item.gross_weight);
+              let grossWeightNum;
+              if (!isNaN(orderGross) && orderGross > 0) {
+                grossWeightNum = orderGross;
+              } else if (totalBoxes > 0 && boxWeightPerBox > 0) {
+                grossWeightNum = netWeight + totalBoxes * boxWeightPerBox;
+              } else {
+                grossWeightNum = netWeight + totalBoxes * 0.5;
+              }
               const boxStatus = stage2BoxStatusMap[item.oiid] || { available: 0 };
               const availableBoxes = boxStatus.available || 0;
               const pendingBoxes = Math.max(totalBoxes - availableBoxes, 0);
@@ -462,7 +470,7 @@ const FlowerOrderAssignStage3 = () => {
                 id: `${item.oiid}-0`,
                 oiid: item.oiid,
                 product: (item.product_name || item.product || '').replace(/^\d+\s*-\s*/, ''),
-                grossWeight: `${grossWeight.toFixed(2)} kg`,
+                grossWeight: `${grossWeightNum.toFixed(2)} kg`,
                 totalBoxes: totalBoxes,
                 availableBoxes: availableBoxes,
                 pendingBoxes: pendingBoxes,

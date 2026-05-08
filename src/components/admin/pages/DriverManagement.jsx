@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import {
   Search,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllDrivers, deleteDriver } from '../../../api/driverApi';
+import { getPayoutList as getDailyPayoutList } from '../../../api/dailyPayoutsApi';
 import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -36,6 +37,7 @@ const DriverManagement = () => {
   const itemsPerPage = 7;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [driverPaymentTotal, setDriverPaymentTotal] = useState(0);
 
   const setPage = useCallback((page) => {
     const safePage = Math.max(1, page);
@@ -71,11 +73,15 @@ const DriverManagement = () => {
   const fetchDrivers = async () => {
     try {
       setLoading(true);
-      const response = await getAllDrivers();
+      const [driversResponse, payoutsResponse] = await Promise.all([
+        getAllDrivers(),
+        getDailyPayoutList({ type: 'driver' }).catch(() => ({ data: [] }))
+      ]);
       // console.log('Driver list response:', response);
 
       // Check if response has data property
-      const driversData = response.data || response;
+      const driversData = driversResponse.data || driversResponse;
+      const payoutsData = payoutsResponse?.data || payoutsResponse || [];
       // console.log('Drivers data:', driversData);
 
       // Log the raw driver data to understand ID formats
@@ -115,10 +121,14 @@ const DriverManagement = () => {
       });
       // console.log('Transformed drivers:', transformedDrivers);
       setDrivers(transformedDrivers);
+      const totalPaidAmount = (Array.isArray(payoutsData) ? payoutsData : [])
+        .reduce((sum, payout) => sum + (parseFloat(payout.amount) || 0), 0);
+      setDriverPaymentTotal(totalPaidAmount);
       setError(null);
     } catch (err) {
       console.error('Error fetching drivers:', err);
       setError('Failed to load drivers');
+      setDriverPaymentTotal(0);
       // Fallback to hardcoded data if API fails
       setDrivers([
         {
@@ -218,6 +228,20 @@ const DriverManagement = () => {
   };
 
   // Filter and pagination logic
+  const driverStats = useMemo(() => {
+    const totalDrivers = drivers.length;
+    const activeDrivers = drivers.filter((driver) => driver.status === 'Present').length;
+    const absentDrivers = drivers.filter((driver) => driver.status === 'Absent').length;
+    return {
+      totalDrivers,
+      activeDrivers,
+      absentDrivers
+    };
+  }, [drivers]);
+
+  const formatCurrency = (value) =>
+    `Rs. ${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
   const filteredDrivers = drivers.filter(driver => {
     const matchesSearch = searchQuery === '' ||
       (driver.name && driver.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -557,6 +581,26 @@ const DriverManagement = () => {
       {/* Search and Filters */}
       {!loading && (
         <>
+          {/* Dashboard summary cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div className="rounded-2xl p-6 bg-gradient-to-r from-[#D1FAE5] to-[#A7F3D0] text-[#0D5C4D]">
+              <div className="text-sm font-medium mb-2 opacity-90">Total Drivers</div>
+              <div className="text-4xl font-bold">{driverStats.totalDrivers}</div>
+            </div>
+            <div className="rounded-2xl p-6 bg-gradient-to-r from-[#6EE7B7] to-[#34D399] text-[#0D5C4D]">
+              <div className="text-sm font-medium mb-2 opacity-90">Active Drivers</div>
+              <div className="text-4xl font-bold">{driverStats.activeDrivers}</div>
+            </div>
+            <div className="rounded-2xl p-6 bg-gradient-to-r from-[#10B981] to-[#059669] text-white">
+              <div className="text-sm font-medium mb-2 opacity-90">Absent Drivers</div>
+              <div className="text-4xl font-bold">{driverStats.absentDrivers}</div>
+            </div>
+            <div className="rounded-2xl p-6 bg-gradient-to-r from-[#047857] to-[#065F46] text-white">
+              <div className="text-sm font-medium mb-2 opacity-90">Driver Payments</div>
+              <div className="text-3xl font-bold">{formatCurrency(driverPaymentTotal)}</div>
+            </div>
+          </div>
+
           <div className="bg-white rounded-xl shadow-sm border border-[#D0E0DB] p-4 mb-6">
             <div className="flex flex-col gap-4">
               <div className="w-full relative">

@@ -89,6 +89,16 @@ const ReportAirportView = () => {
     let stage3Data = typeof assignment.stage3_data === 'string' ? JSON.parse(assignment.stage3_data) : assignment.stage3_data;
     const deliveryData = stage3Data.products || [];
     const airportGroups = stage3Data.summaryData?.airportGroups || {};
+
+    const parseNumBoxesLocal = (numBoxesStr) => {
+      if (!numBoxesStr) return 0;
+      const match = String(numBoxesStr).match(/^(\d+(?:\.\d+)?)/);
+      return match ? parseFloat(match[1]) : 0;
+    };
+    const orderItemsByOiid = {};
+    (order.items || []).forEach((oi) => {
+      if (oi.oiid != null) orderItemsByOiid[oi.oiid] = oi;
+    });
     let summaryAirportGroups = airportGroups;
     if (assignment.stage3_summary_data) {
       try {
@@ -201,7 +211,24 @@ const ReportAirportView = () => {
         productsByDriver[driverName].driverInfo = drivers.find(d => d.driver_name === driverName) || {};
       }
 
-      const grossWeight = parseFloat(String(item.grossWeight || item.gross_weight || '0').replace(/[^0-9.]/g, '')) || 0;
+      let grossWeight = parseFloat(String(item.grossWeight || item.gross_weight || '0').replace(/[^0-9.]/g, '')) || 0;
+      const lineOiid = item.oiid;
+      const orderLine = lineOiid != null ? orderItemsByOiid[lineOiid] : null;
+      if (orderLine) {
+        const lineGross = parseFloat(orderLine.gross_weight ?? orderLine.grossWeight);
+        const lineBoxes = parseNumBoxesLocal(orderLine.num_boxes ?? orderLine.numBoxes);
+        const rowPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0, 10) || 0;
+        if (!isNaN(lineGross) && lineGross > 0 && lineBoxes > 0) {
+          grossWeight = rowPkgs > 0 ? (lineGross * rowPkgs) / lineBoxes : lineGross;
+        } else {
+          const lineNet = parseFloat(orderLine.net_weight ?? orderLine.netWeight) || 0;
+          const boxPerBox = parseFloat(orderLine.box_weight ?? orderLine.boxWeight) || 0;
+          if (lineBoxes > 0 && boxPerBox > 0) {
+            const pkgs = rowPkgs > 0 ? rowPkgs : lineBoxes;
+            grossWeight = (lineNet * pkgs) / lineBoxes + pkgs * boxPerBox;
+          }
+        }
+      }
       const stage4Product = stage4ProductRows.find(p4 => (p4.product_name || p4.product || p4.productName) === product);
       const pricePerKg = stage4Product ? parseFloat(stage4Product.price || stage4Product.final_price || 0) : 0;
       const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : grossWeight;

@@ -529,12 +529,21 @@ const OrderAssignManagement = () => {
                       };
 
                       const assignNav = getAssignPath(shouldShowEdit);
+                      const isFullyAssigned =
+                        allStagesCompleted || localOrderCompleted;
 
-                      if (allStagesCompleted || localOrderCompleted) {
+                      if (isFullyAssigned) {
+                        const editNav = getAssignPath(true);
                         return (
-                          <span className="px-4 py-2 bg-emerald-100 text-emerald-700 text-sm font-semibold rounded-lg">
-                            Completed
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(editNav.path, { state: editNav.state })
+                            }
+                            className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                          >
+                            Edit Assign
+                          </button>
                         );
                       } else if (shouldShowEdit) {
                         return (

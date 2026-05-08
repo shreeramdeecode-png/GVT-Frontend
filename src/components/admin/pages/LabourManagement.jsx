@@ -13,6 +13,20 @@ import { BASE_URL } from '../../../config/config';
 import { getLabourManagementPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
 import * as XLSX from 'xlsx-js-style';
 
+const mapLabourStatus = (status) => {
+  const raw = String(status || '').trim().toLowerCase();
+  if (raw === 'live' || raw === 'active' || raw === 'present') {
+    return { label: 'Live', color: 'bg-[#10B981]' };
+  }
+  if (raw === 'terminated') {
+    return { label: 'Terminated', color: 'bg-red-500' };
+  }
+  if (raw === 'relieved' || raw === 'relived' || raw === 'inactive' || raw === 'absent') {
+    return { label: 'Relieved', color: 'bg-orange-500' };
+  }
+  return { label: status || 'Unknown', color: 'bg-orange-500' };
+};
+
 const LabourManagement = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -105,6 +119,7 @@ const LabourManagement = () => {
             ? wageFromSettings 
             : 0;
           
+          const statusMeta = mapLabourStatus(labour.status);
           return {
             id: labour.lid,
             labourId: labour.labour_id,
@@ -114,19 +129,8 @@ const LabourManagement = () => {
             profileImage: labour.profile_image,
             phone: labour.mobile_number,
             workType: labour.work_type,
-            status: (() => {
-              const s = (labour.status || '').toLowerCase();
-              if (s === 'active' || s === 'present') return 'Present';
-              if (s === 'absent') return 'Absent';
-              return labour.status; // Fallback
-            })(),
-
-            statusColor: (() => {
-              const s = (labour.status || '').toLowerCase();
-              if (s === 'active' || s === 'present') return 'bg-[#10B981]';
-              if (s === 'absent') return 'bg-red-500';
-              return 'bg-orange-500';
-            })(),
+            status: statusMeta.label,
+            statusColor: statusMeta.color,
             dailyWage: `₹${dailyWage.toFixed(2)}`,
             location: labour.city || labour.address || ''
           };
@@ -169,6 +173,7 @@ const LabourManagement = () => {
           ? wageFromSettings 
           : 0;
         
+        const statusMeta = mapLabourStatus(labour.status);
         return {
           id: labour.lid,
           labourId: labour.labour_id,
@@ -178,19 +183,8 @@ const LabourManagement = () => {
           profileImage: labour.profile_image,
           phone: labour.mobile_number,
           workType: labour.work_type,
-          status: (() => {
-            const s = (labour.status || '').toLowerCase();
-            if (s === 'active' || s === 'present') return 'Present';
-            if (s === 'absent') return 'Absent';
-            return labour.status; // Fallback
-          })(),
-
-          statusColor: (() => {
-            const s = (labour.status || '').toLowerCase();
-            if (s === 'active' || s === 'present') return 'bg-[#10B981]';
-            if (s === 'absent') return 'bg-red-500';
-            return 'bg-orange-500';
-          })(),
+          status: statusMeta.label,
+          statusColor: statusMeta.color,
           dailyWage: `₹${dailyWage.toFixed(2)}`,
           location: labour.city || labour.address || ''
         };
@@ -215,7 +209,7 @@ const LabourManagement = () => {
   };
 
   const totalLabours = labours.length;
-  const activeLabours = labours.filter(l => l.status === 'Present' || l.status === 'Active').length;
+  const activeLabours = labours.filter(l => l.status === 'Live').length;
 
   const stats = [
     {
@@ -483,8 +477,9 @@ const LabourManagement = () => {
                 className="appearance-none bg-white border border-[#D0E0DB] rounded-lg px-4 py-2 pr-10 text-sm text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer min-w-[150px]"
               >
                 <option value="All">Status: All</option>
-                <option value="Present">Present</option>
-                <option value="Absent">Absent</option>
+                <option value="Live">Live</option>
+                <option value="Terminated">Terminated</option>
+                <option value="Relieved">Relieved</option>
               </select>
               <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[#6B8782] pointer-events-none" size={16} />
             </div>
