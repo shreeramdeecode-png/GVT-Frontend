@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Download, ChevronDown, ChevronLeft, ChevronRight, Plus, Check, User } from 'lucide-react';
 import { getAllStock } from '../../../api/orderAssignmentApi';
@@ -14,6 +14,27 @@ import { createSellStock, getAllSellStocks, deleteSellStock } from '../../../api
 import { createNotification, getNotifications } from '../../../api/notificationApi';
 import { BASE_URL } from '../../../config/config';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
+
+const parseOrderIdNumber = (orderId) => {
+  const match = String(orderId || '').match(/(\d+)\s*$/);
+  return match ? parseInt(match[1], 10) : 0;
+};
+
+const getStockRowDateMs = (item) => {
+  const raw = item.date || item.stock_creation_time || item.created_at;
+  if (!raw) return 0;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+/** Newest date first, then highest order number (ORD-041 above ORD-037). */
+const compareStockManagementRows = (a, b) => {
+  const dateDiff = getStockRowDateMs(b) - getStockRowDateMs(a);
+  if (dateDiff !== 0) return dateDiff;
+  const orderDiff = parseOrderIdNumber(b.order_id) - parseOrderIdNumber(a.order_id);
+  if (orderDiff !== 0) return orderDiff;
+  return Number(b.stock_id ?? b.sid ?? 0) - Number(a.stock_id ?? a.sid ?? 0);
+};
 
 const StockManagement = () => {
   const navigate = useNavigate();
@@ -48,7 +69,9 @@ const StockManagement = () => {
 
   // Market price tab state
   const [marketSearchTerm, setMarketSearchTerm] = useState('');
+  const [marketPriceFilter, setMarketPriceFilter] = useState('All'); // All | Pending | Updated
   const [marketCurrentPage, setMarketCurrentPage] = useState(1);
+  const [marketPriceSavedPid, setMarketPriceSavedPid] = useState(null);
 
   // Inventory tab state
   const [inventorySearchTerm, setInventorySearchTerm] = useState('');
@@ -274,26 +297,31 @@ const StockManagement = () => {
   }, [openSellDropdown]);
 
   useEffect(() => {
-    if (!dataFetched.stock) {
-      const fetchStock = async () => {
-        try {
-          const response = await getAllStock();
-          if (response.success) {
-            const stock = response.data || [];
-            setStockData(stock);
-            // Check for low stock after fetching
-            await checkLowStock(stock);
-          }
-        } catch (error) {
-          console.error('Error fetching stock:', error.message);
-        } finally {
-          setLoading(false);
-          setDataFetched(prev => ({ ...prev, stock: true }));
+    if (activeTab !== 'stock') return;
+
+    let cancelled = false;
+    const fetchStock = async () => {
+      try {
+        setLoading(true);
+        const response = await getAllStock();
+        if (cancelled) return;
+        if (response.success) {
+          const stock = response.data || [];
+          setStockData(stock);
+          await checkLowStock(stock);
         }
-      };
-      fetchStock();
-    }
-  }, [dataFetched.stock, checkLowStock]);
+      } catch (error) {
+        console.error('Error fetching stock:', error.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchStock();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, checkLowStock]);
 
   useEffect(() => {
     if (!dataFetched.products) {
@@ -478,31 +506,7 @@ const StockManagement = () => {
 
   const handlePriceEdit = (pid, currentPrice) => {
     setEditingPriceId(pid);
-    setEditingPrice(currentPrice);
-  };
-
-  const handlePriceSave = async (pid) => {
-    try {
-      const formData = new FormData();
-      formData.append('current_price', editingPrice);
-      await updateProduct(pid, formData);
-      setEditingPriceId(null);
-      setEditingPrice('');
-
-      // Refresh products list
-      const response = await getAllProducts(1, 1000);
-      if (response.success) {
-        setProducts(response.data || []);
-      }
-    } catch (error) {
-      console.error('Error updating price:', error);
-      alert('Failed to update price. Please try again.');
-    }
-  };
-
-  const handlePriceCancel = () => {
-    setEditingPriceId(null);
-    setEditingPrice('');
+    setEditingPrice(currentPrice === '' || currentPrice == null ? '' : String(currentPrice));
   };
 
   // Helper: today's market price from product price_date (same as OrderAssignCreateStage4)
@@ -524,6 +528,85 @@ const StockManagement = () => {
       console.error('Error parsing price_date:', error);
       return null;
     }
+  };
+
+  const isMarketPriceUpdatedToday = (product) => {
+    const todaysPrice = getTodaysMarketPrice(product);
+    if (todaysPrice != null && todaysPrice > 0) return true;
+    const today = new Date().toISOString().split('T')[0];
+    const updatedRaw = product?.updated_at || product?.updatedAt;
+    if (updatedRaw && new Date(updatedRaw).toISOString().split('T')[0] === today) {
+      return (parseFloat(product.current_price) || 0) > 0;
+    }
+    return false;
+  };
+
+  const getDisplayMarketPrice = (product) => {
+    const todaysPrice = getTodaysMarketPrice(product);
+    if (todaysPrice != null && todaysPrice > 0) return todaysPrice;
+    const current = parseFloat(product?.current_price);
+    return Number.isFinite(current) && current > 0 ? current : '';
+  };
+
+  const applyTodayPriceToProduct = (product, priceNum) => {
+    const today = new Date().toISOString().split('T')[0];
+    let priceHistory = product.price_date;
+    try {
+      priceHistory =
+        typeof priceHistory === 'string' ? JSON.parse(priceHistory) : priceHistory || [];
+    } catch {
+      priceHistory = [];
+    }
+    if (!Array.isArray(priceHistory)) priceHistory = [];
+    const todayIndex = priceHistory.findIndex((entry) => entry?.date === today);
+    if (todayIndex >= 0) {
+      priceHistory = priceHistory.map((entry, i) =>
+        i === todayIndex ? { ...entry, price: priceNum } : entry
+      );
+    } else {
+      priceHistory = [...priceHistory, { date: today, price: priceNum }];
+    }
+    return {
+      ...product,
+      current_price: priceNum,
+      price_date: priceHistory,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const handlePriceSave = async (pid) => {
+    const priceNum = parseFloat(editingPrice);
+    if (!editingPrice || Number.isNaN(priceNum) || priceNum <= 0) {
+      alert('Please enter a valid market price');
+      return;
+    }
+    try {
+      const formData = new FormData();
+      formData.append('current_price', String(priceNum));
+      await updateProduct(pid, formData);
+
+      setEditingPriceId(null);
+      setEditingPrice('');
+      setMarketPriceSavedPid(pid);
+      setTimeout(() => setMarketPriceSavedPid(null), 2500);
+
+      setProducts((prev) =>
+        prev.map((p) => (p.pid === pid ? applyTodayPriceToProduct(p, priceNum) : p))
+      );
+
+      const response = await getAllProducts(1, 1000);
+      if (response.success) {
+        setProducts(response.data || []);
+      }
+    } catch (error) {
+      console.error('Error updating price:', error);
+      alert('Failed to update price. Please try again.');
+    }
+  };
+
+  const handlePriceCancel = () => {
+    setEditingPriceId(null);
+    setEditingPrice('');
   };
 
   // Market price display for sell form: show price only if updated today; otherwise warning only (no old price)
@@ -864,9 +947,33 @@ const StockManagement = () => {
 
   // Derived data for Market Price tab (search + pagination)
   const marketItemsPerPage = 10;
-  const filteredMarketProducts = products.filter((product) =>
-    product.product_name?.toLowerCase().includes(marketSearchTerm.toLowerCase())
-  );
+  const marketPriceCounts = useMemo(() => {
+    let pending = 0;
+    let updated = 0;
+    products.forEach((product) => {
+      if (isMarketPriceUpdatedToday(product)) updated += 1;
+      else pending += 1;
+    });
+    return { all: products.length, pending, updated };
+  }, [products]);
+
+  const filteredMarketProducts = useMemo(() => {
+    const term = marketSearchTerm.toLowerCase();
+    return products
+      .filter((product) => {
+        if (term && !product.product_name?.toLowerCase().includes(term)) return false;
+        const isUpdated = isMarketPriceUpdatedToday(product);
+        if (marketPriceFilter === 'Pending') return !isUpdated;
+        if (marketPriceFilter === 'Updated') return isUpdated;
+        return true;
+      })
+      .sort((a, b) => {
+        const aDone = isMarketPriceUpdatedToday(a);
+        const bDone = isMarketPriceUpdatedToday(b);
+        if (aDone !== bDone) return aDone ? 1 : -1;
+        return (a.product_name || '').localeCompare(b.product_name || '');
+      });
+  }, [products, marketSearchTerm, marketPriceFilter]);
   const totalMarketPages = Math.max(1, Math.ceil(filteredMarketProducts.length / marketItemsPerPage));
   const effectiveMarketPage = Math.min(marketCurrentPage, totalMarketPages);
   const marketStartIndex = (effectiveMarketPage - 1) * marketItemsPerPage;
@@ -922,17 +1029,23 @@ const StockManagement = () => {
 
   // Derived data for Stock Management tab (search + type filter + pagination)
   const stockItemsPerPage = 10;
-  const filteredStock = stockData.filter(item => {
+  const filteredStock = useMemo(() => {
     const term = searchTerm.toLowerCase();
-    const matchesSearch = !term ||
-      (item.order_id || '').toLowerCase().includes(term) ||
-      (item.name || '').toLowerCase().includes(term) ||
-      (item.products || '').toLowerCase().includes(term) ||
-      (item.type || '').toLowerCase().includes(term);
-    const matchesType = statusFilter === 'All Types' ||
-      (item.type || '').toLowerCase() === statusFilter.toLowerCase();
-    return matchesSearch && matchesType;
-  });
+    return stockData
+      .filter((item) => {
+        const matchesSearch =
+          !term ||
+          (item.order_id || '').toLowerCase().includes(term) ||
+          (item.name || '').toLowerCase().includes(term) ||
+          (item.products || '').toLowerCase().includes(term) ||
+          (item.type || '').toLowerCase().includes(term);
+        const matchesType =
+          statusFilter === 'All Types' ||
+          (item.type || '').toLowerCase() === statusFilter.toLowerCase();
+        return matchesSearch && matchesType;
+      })
+      .sort(compareStockManagementRows);
+  }, [stockData, searchTerm, statusFilter]);
   const stockTotalPages = Math.max(1, Math.ceil(filteredStock.length / stockItemsPerPage));
   const effectiveStockPage = Math.min(currentPage, stockTotalPages);
   const stockStartIndex = (effectiveStockPage - 1) * stockItemsPerPage;
@@ -1157,9 +1270,9 @@ const StockManagement = () => {
       {/* Market Price Entry Tab - Show Products Table */}
       {activeTab === 'market' && (
         <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          {/* Search bar for market price products */}
-          <div className="px-6 py-4 border-b border-[#D0E0DB]">
-            <div className="relative max-w-sm">
+          {/* Search + price status filter */}
+          <div className="px-6 py-4 border-b border-[#D0E0DB] flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+            <div className="relative flex-1 max-w-sm">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#6B8782]" size={18} />
               <input
                 type="text"
@@ -1172,6 +1285,21 @@ const StockManagement = () => {
                 className="w-full pl-10 pr-4 py-2.5 bg-[#F0F4F3] border border-transparent rounded-xl text-[#0D5C4D] placeholder-[#6B8782] focus:outline-none focus:ring-2 focus:ring-[#0D8568]"
               />
             </div>
+            <div className="relative">
+              <select
+                value={marketPriceFilter}
+                onChange={(e) => {
+                  setMarketPriceFilter(e.target.value);
+                  setMarketCurrentPage(1);
+                }}
+                className="appearance-none min-w-[200px] px-4 py-2.5 pr-10 bg-[#F0F4F3] border border-transparent rounded-xl text-[#0D5C4D] focus:outline-none focus:ring-2 focus:ring-[#0D8568] cursor-pointer"
+              >
+                <option value="All">All ({marketPriceCounts.all})</option>
+                <option value="Pending">Pending ({marketPriceCounts.pending})</option>
+                <option value="Updated">Updated ({marketPriceCounts.updated})</option>
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[#6B8782] w-4 h-4 pointer-events-none" />
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -1183,13 +1311,38 @@ const StockManagement = () => {
                   <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Category</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Unit</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Last Updated</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
+                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Price Status</th>
                   <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Market Price (₹/KG)</th>
                 </tr>
               </thead>
               <tbody>
-                {marketPaginatedProducts.map((product, index) => (
-                  <tr key={product.pid} className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'}`}>
+                {marketPaginatedProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-[#6B8782]">
+                      {marketPriceFilter === 'Pending'
+                        ? 'No pending products — all prices updated for today.'
+                        : marketPriceFilter === 'Updated'
+                          ? 'No products updated today yet.'
+                          : 'No products found'}
+                    </td>
+                  </tr>
+                ) : marketPaginatedProducts.map((product, index) => {
+                  const priceUpdatedToday = isMarketPriceUpdatedToday(product);
+                  const displayPrice = getDisplayMarketPrice(product);
+                  const justSaved = marketPriceSavedPid === product.pid;
+                  return (
+                  <tr
+                    key={product.pid}
+                    className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-all duration-500 ${
+                      justSaved
+                        ? 'bg-[#D1FAE5]'
+                        : priceUpdatedToday
+                          ? 'bg-[#ECFDF5]/80'
+                          : index % 2 === 0
+                            ? 'bg-white'
+                            : 'bg-[#F0F4F3]/30'
+                    }`}
+                  >
                     <td className="px-6 py-4">
                       {product.product_image ? (
                         <img src={`${BASE_URL}${product.product_image}`} alt={product.product_name} className="w-12 h-12 rounded-lg object-cover" />
@@ -1207,15 +1360,21 @@ const StockManagement = () => {
                       <div className="text-sm text-[#0D5C4D]">{product.unit}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-500">
-                        {new Date(product.updatedAt).toLocaleDateString()}
+                      <div className={`text-sm font-medium ${priceUpdatedToday ? 'text-[#047857]' : 'text-gray-500'}`}>
+                        {priceUpdatedToday ? 'Today' : new Date(product.updatedAt || product.updated_at).toLocaleDateString()}
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 w-fit ${product.product_status === 'active' ? 'bg-[#4ED39A]' : 'bg-yellow-500'} text-white`}>
-                        <div className="w-2 h-2 rounded-full bg-white"></div>
-                        {product.product_status}
-                      </span>
+                      {priceUpdatedToday ? (
+                        <span className="px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 w-fit bg-[#4ED39A] text-white">
+                          <Check className="w-3 h-3" />
+                          Updated
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 w-fit bg-amber-100 text-amber-800">
+                          Pending
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       {editingPriceId === product.pid ? (
@@ -1251,26 +1410,36 @@ const StockManagement = () => {
                           </button>
                         </div>
                       ) : (
-                        <input
-                          ref={(el) => {
-                            if (el) marketPriceRefs.current[`${index}`] = el;
-                          }}
-                          type="text"
-                          value={product.current_price}
-                          onClick={() => handlePriceEdit(product.pid, product.current_price)}
-                          readOnly
-                          onKeyDown={(e) => {
-                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                              handleMarketPriceKeyDown(e, index, marketPaginatedProducts.length);
-                            }
-                          }}
-                          className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm cursor-pointer hover:border-[#0D7C66] focus:outline-none"
-                          title="Click to edit price"
-                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            ref={(el) => {
+                              if (el) marketPriceRefs.current[`${index}`] = el;
+                            }}
+                            type="text"
+                            value={displayPrice}
+                            onClick={() => handlePriceEdit(product.pid, displayPrice)}
+                            readOnly
+                            onKeyDown={(e) => {
+                              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                                handleMarketPriceKeyDown(e, index, marketPaginatedProducts.length);
+                              }
+                            }}
+                            className={`w-24 px-2 py-1 border rounded-lg text-sm font-semibold cursor-pointer focus:outline-none ${
+                              priceUpdatedToday
+                                ? 'border-[#4ED39A] bg-[#ECFDF5] text-[#047857]'
+                                : 'border-gray-200 hover:border-[#0D7C66]'
+                            }`}
+                            title="Click to edit price"
+                          />
+                          {priceUpdatedToday && (
+                            <Check className="w-4 h-4 text-[#047857] flex-shrink-0" aria-hidden />
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -1,35 +1,38 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, Download } from 'lucide-react';
+import PayoutFilterBar, { PayAllConfirmModal } from '../common/PayoutFilterBar';
+import PayoutPagination from '../common/PayoutPagination';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getAllDrivers } from '../../../api/driverApi';
 import { getAllDriverRates } from '../../../api/driverRateApi';
 import { getAllFuelExpenses } from '../../../api/fuelExpenseApi';
 import { getAllExcessKMs } from '../../../api/excessKmApi';
+import {
+  buildExcessKmMapsFromRecords,
+  computeDriverDayKmPayout,
+  getTotalDrivenKM,
+  toPayoutDateStr,
+} from '../../../api/driverApi';
 import { getAllAdvancePays } from '../../../api/advancePayApi';
 import { getAttendanceOverview } from '../../../api/driverAttendanceApi';
-import { getPaidRecords, markAsPaid, markPartialPaid } from '../../../api/payoutApi';
+import { getPaidRecords, markAsPaid, markPartialPaid, unmarkAsPaid } from '../../../api/payoutApi';
 import {
   getPaidRecords as getDailyPaidRecords,
   markAsPaid as markDailyAsPaid
 } from '../../../api/dailyPayoutsApi';
 import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
+import { sortPayoutsByStatus, usePayoutPayAll, driverTh, driverTd, driverTdNum, driverTdKm, driverBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, getPayoutStatusClassName, payoutActionRow } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
 import 'jspdf-autotable';
 
-const ITEMS_PER_PAGE = 7;
+const ITEMS_PER_PAGE = DEFAULT_PAYOUT_PAGE_SIZE;
 const DAYS_BACK = 60;
 const STORAGE_KEY_ALL = 'driver-daily-paid';
+const DEFAULT_FREE_KM = 100;
 
-const toDateStr = (val) => {
-  if (!val) return '';
-  try {
-    return new Date(val).toISOString().split('T')[0];
-  } catch {
-    return String(val).substring(0, 10);
-  }
-};
+const toDateStr = toPayoutDateStr;
 
 const parseRowData = (paymentRecord) => {
   const raw = paymentRecord?.row_data;
@@ -192,38 +195,14 @@ const DriverPayoutManagement = () => {
         advanceByDriverByDate[driverId][dateStr] = (advanceByDriverByDate[driverId][dateStr] || 0) + amt;
       });
 
-      const excessKMByDriverByDate = {};
-      const excessKMRecordByDriverByDate = {};
-      const startKMByDriverByDate = {};
-      const endKMByDriverByDate = {};
-      excessKMs.forEach(km => {
-        const driverId = String(km.driver_id ?? km.did ?? km.driver?.did ?? '');
-        if (!driverId) return;
-        const dateStr = toDateStr(km.date);
-        if (!dateStr) return;
-        if (!excessKMByDriverByDate[driverId]) {
-          excessKMByDriverByDate[driverId] = {};
-          excessKMRecordByDriverByDate[driverId] = {};
-          startKMByDriverByDate[driverId] = {};
-          endKMByDriverByDate[driverId] = {};
-        }
-        const startKm = Math.max(parseFloat(km.start_km ?? km.startKm ?? 0) || 0, 0);
-        const endKm = Math.max(parseFloat(km.end_km ?? km.endKm ?? 0) || 0, 0);
-        const amt = parseFloat(km.amount || 0) || 0;
-        const recordId = km.id ?? km.ekmid ?? km.excess_km_id;
-        if (startKm) {
-          startKMByDriverByDate[driverId][dateStr] = startKMByDriverByDate[driverId][dateStr] != null
-            ? Math.min(startKMByDriverByDate[driverId][dateStr], startKm) : startKm;
-        }
-        if (endKm) {
-          endKMByDriverByDate[driverId][dateStr] = endKMByDriverByDate[driverId][dateStr] != null
-            ? Math.max(endKMByDriverByDate[driverId][dateStr], endKm) : endKm;
-        }
-        excessKMByDriverByDate[driverId][dateStr] = (excessKMByDriverByDate[driverId][dateStr] || 0) + amt;
-        if (recordId && !excessKMRecordByDriverByDate[driverId][dateStr]) {
-          excessKMRecordByDriverByDate[driverId][dateStr] = recordId;
-        }
-      });
+      const {
+        amountByDriverByDate: excessKMByDriverByDate,
+        recordIdByDriverByDate: excessKMRecordByDriverByDate,
+        startKMByDriverByDate,
+        endKMByDriverByDate,
+        explicitExcessKmByDriverByDate: excessDistanceByDriverByDate,
+        kilometersFieldByDriverByDate,
+      } = buildExcessKmMapsFromRecords(excessKMs);
 
       // Driver attendance: which (date, driver) were present (for showing daily wages only on present days)
       const presentSet = new Set();
@@ -260,7 +239,7 @@ const DriverPayoutManagement = () => {
           if (!assignmentRes?.data) return;
 
           const orderDate = order.order_received_date || order.createdAt;
-          const dateStr = orderDate ? new Date(orderDate).toISOString().split('T')[0] : '';
+          const dateStr = toDateStr(orderDate);
 
           // Check Stage 1 for driver assignments in delivery routes
           let stage1Data = null;
@@ -598,6 +577,7 @@ const DriverPayoutManagement = () => {
         const fuelDates = Object.keys(fuelByDriverByDate[driverId] || {});
         const advanceDates = Object.keys(advanceByDriverByDate[driverId] || {});
         const excessDates = Object.keys(excessKMByDriverByDate[driverId] || {});
+        const excessDistanceDates = Object.keys(excessDistanceByDriverByDate[driverId] || {});
         const startKMDates = Object.keys(startKMByDriverByDate[driverId] || {});
         const endKMDates = Object.keys(endKMByDriverByDate[driverId] || {});
 
@@ -606,6 +586,7 @@ const DriverPayoutManagement = () => {
           ...fuelDates,
           ...advanceDates,
           ...excessDates,
+          ...excessDistanceDates,
           ...startKMDates,
           ...endKMDates
         ]);
@@ -619,30 +600,22 @@ const DriverPayoutManagement = () => {
             const advancePay = (advanceByDriverByDate[driverId] || {})[dateStr] || 0;
             const startKM = (startKMByDriverByDate[driverId] || {})[dateStr];
             const endKM = (endKMByDriverByDate[driverId] || {})[dateStr];
-
-            let excessDistanceKM = 0;
-            if (startKM != null && endKM != null) {
-              const travelled = Math.max(endKM - startKM, 0);
-              if (driverKmLimit && driverKmLimit > 0) {
-                excessDistanceKM = Math.max(travelled - driverKmLimit, 0);
-              } else {
-                excessDistanceKM = travelled;
-              }
-            }
-
             const unitPrice = (fuelUnitPriceByDriverByDate[driverId] || {})[dateStr] || 0;
-            const savedAmount = (excessKMByDriverByDate[driverId] || {})[dateStr];
-            const hasManualAmount = savedAmount != null && Number(savedAmount) > 0;
-            let excessKMPrice = 0;
-            if (hasManualAmount) {
-              excessKMPrice = Number(savedAmount);
-            } else if (unitPrice && excessDistanceKM > 0) {
-              excessKMPrice = excessDistanceKM * unitPrice;
-            }
+            const savedAmount = (excessKMByDriverByDate[driverId] || {})[dateStr] || 0;
+            const kmPay = computeDriverDayKmPayout({
+              startKM,
+              endKM,
+              savedAmount,
+              explicitExcessKm: (excessDistanceByDriverByDate[driverId] || {})[dateStr] || 0,
+              kilometersFromRecord: (kilometersFieldByDriverByDate[driverId] || {})[dateStr] || 0,
+              kmLimit: driverKmLimit,
+              fuelUnitPrice: unitPrice,
+              freeKmFallback: DEFAULT_FREE_KM,
+            });
 
             const key = `${dateStr}_${driverId}`;
             const paymentRecord = paidRecordMap[key];
-            const totalPayout = basePay - fuel - advancePay + excessKMPrice;
+            const totalPayout = basePay - fuel - advancePay + kmPay.excessKMPrice;
             const status = getPayoutStatus({ paymentRecord, key, paidSet, totalPayout });
             const partialPaidAmount = getPartialPaidAmount(paymentRecord);
             const remainingAmount = status === 'Partial' ? Math.max(totalPayout - partialPaidAmount, 0) : 0;
@@ -658,8 +631,11 @@ const DriverPayoutManagement = () => {
               fuelExpenses: fuel,
               startKM,
               endKM,
-              excessKM: excessDistanceKM,
-              excessKMPrice,
+              totalKM: kmPay.totalKM,
+              excessKM: kmPay.excessKM,
+              excessKMPrice: kmPay.excessKMPrice,
+              hasKmRecord: kmPay.hasKmRecord,
+              excessKMRecordId: (excessKMRecordByDriverByDate[driverId] || {})[dateStr] || null,
               advancePay,
               totalPayout,
               status,
@@ -671,7 +647,7 @@ const DriverPayoutManagement = () => {
       });
 
       if (presentSet.size > 0) {
-        allRows = allRows.filter((r) => presentSet.has(r.key));
+        allRows = allRows.filter((r) => presentSet.has(r.key) || r.hasKmRecord);
         presentSet.forEach((key) => {
           if (allRows.some((r) => r.key === key)) return;
           const idx = key.indexOf('_');
@@ -696,25 +672,19 @@ const DriverPayoutManagement = () => {
           const advancePay = (advanceByDriverByDate[driverId] || {})[dateStr] || 0;
           const startKM = (startKMByDriverByDate[driverId] || {})[dateStr];
           const endKM = (endKMByDriverByDate[driverId] || {})[dateStr];
-          let excessDistanceKM = 0;
-          if (startKM != null && endKM != null) {
-            const travelled = Math.max(endKM - startKM, 0);
-            if (driverKmLimit && driverKmLimit > 0) {
-              excessDistanceKM = Math.max(travelled - driverKmLimit, 0);
-            } else {
-              excessDistanceKM = travelled;
-            }
-          }
           const unitPrice = (fuelUnitPriceByDriverByDate[driverId] || {})[dateStr] || 0;
-          const savedAmount = (excessKMByDriverByDate[driverId] || {})[dateStr];
-          const hasManualAmount = savedAmount != null && Number(savedAmount) > 0;
-          let excessKMPrice = 0;
-          if (hasManualAmount) {
-            excessKMPrice = Number(savedAmount);
-          } else if (unitPrice && excessDistanceKM > 0) {
-            excessKMPrice = excessDistanceKM * unitPrice;
-          }
-          const totalPayout = driverRate - fuel - advancePay + excessKMPrice;
+          const savedAmount = (excessKMByDriverByDate[driverId] || {})[dateStr] || 0;
+          const kmPay = computeDriverDayKmPayout({
+            startKM,
+            endKM,
+            savedAmount,
+            explicitExcessKm: (excessDistanceByDriverByDate[driverId] || {})[dateStr] || 0,
+            kilometersFromRecord: (kilometersFieldByDriverByDate[driverId] || {})[dateStr] || 0,
+            kmLimit: driverKmLimit,
+            fuelUnitPrice: unitPrice,
+            freeKmFallback: DEFAULT_FREE_KM,
+          });
+          const totalPayout = driverRate - fuel - advancePay + kmPay.excessKMPrice;
           const paymentRecord = paidRecordMap[key];
           const status = getPayoutStatus({ paymentRecord, key, paidSet, totalPayout });
           const partialPaidAmount = getPartialPaidAmount(paymentRecord);
@@ -730,8 +700,11 @@ const DriverPayoutManagement = () => {
             fuelExpenses: fuel,
             startKM,
             endKM,
-            excessKM: excessDistanceKM,
-            excessKMPrice,
+            totalKM: kmPay.totalKM,
+            excessKM: kmPay.excessKM,
+            excessKMPrice: kmPay.excessKMPrice,
+            hasKmRecord: kmPay.hasKmRecord,
+            excessKMRecordId: (excessKMRecordByDriverByDate[driverId] || {})[dateStr] || null,
             advancePay,
             totalPayout,
             status,
@@ -743,6 +716,10 @@ const DriverPayoutManagement = () => {
       }
 
       allRows.sort((a, b) => {
+        const order = { Pending: 0, Partial: 1, Paid: 2 };
+        const sa = order[a.status] ?? 0;
+        const sb = order[b.status] ?? 0;
+        if (sa !== sb) return sa - sb;
         const dateCmp = (b.date || '').localeCompare(a.date || '');
         if (dateCmp !== 0) return dateCmp;
         return (a.driverName || '').localeCompare(b.driverName || '');
@@ -893,9 +870,21 @@ const DriverPayoutManagement = () => {
   const formatNum = (n) =>
     Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '0';
 
+  const handleRevert = async (payout) => {
+    try {
+      setMarkingPaid(true);
+      await unmarkAsPaid('driver', { key: payout.key, id: payout.key, reference_key: payout.key });
+      setPayouts((prev) => prev.map((p) => (p.key === payout.key ? { ...p, status: 'Pending', partialPaidAmount: 0, remainingAmount: p.totalPayout } : p)));
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to revert payout');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
   const filteredPayouts = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return payouts.filter((p) => {
+    return sortPayoutsByStatus(payouts.filter((p) => {
       if (fromDate && (p.date || '') < fromDate) return false;
       if (toDate && (p.date || '') > toDate) return false;
       if (selectedDriverId && String(p.driverId) !== selectedDriverId) return false;
@@ -906,13 +895,102 @@ const DriverPayoutManagement = () => {
         (p.vehicle || '').toLowerCase().includes(query) ||
         (p.date || '').toLowerCase().includes(query)
       );
-    });
+    }));
   }, [payouts, searchQuery, fromDate, toDate, selectedDriverId]);
 
   const totalPending = useMemo(
     () => filteredPayouts.filter((p) => p.status === 'Pending').reduce((sum, p) => sum + (p.totalPayout || 0), 0),
     [filteredPayouts]
   );
+
+  const {
+    payAllModalOpen,
+    payAllSelected,
+    payAllTargets,
+    openPayAllModal,
+    closePayAllModal,
+    removeFromPayAll,
+    getBalanceAmount,
+    resolveKey,
+  } = usePayoutPayAll(filteredPayouts, { totalField: 'totalPayout' });
+
+  const confirmPayAll = async () => {
+    const pending = payAllSelected;
+    if (pending.length === 0) return;
+    try {
+      setMarkingPaid(true);
+      const paidKeyList = [];
+      for (const payout of pending) {
+        const key = payout.key;
+        const rowData = {
+          ...payout,
+          key,
+          id: key,
+          reference_key: key,
+          entity_id: payout.driverId,
+          date: payout.date,
+          driverId: payout.driverId,
+          driverName: payout.driverName,
+          driverCode: payout.driverCode,
+          basePay: payout.basePay,
+          fuelExpenses: payout.fuelExpenses,
+          advancePay: payout.advancePay,
+          excessKMPrice: payout.excessKMPrice,
+          totalPayout: payout.totalPayout,
+          amount: Number(payout.totalPayout) || 0,
+          partial_amount: 0,
+          partialPaidAmount: 0,
+          remainingAmount: 0,
+          paymentNote: '',
+          paymentStatus: 'Paid',
+          status: 'Paid',
+        };
+        await markAsPaid('driver', rowData);
+        await markDailyAsPaid('driver', rowData).catch(() => {});
+        paidKeyList.push(key);
+        const idx = key.indexOf('_');
+        const driverId = key.substring(idx + 1);
+        if (driverId) {
+          try {
+            const sk = `driver-daily-paid-${driverId}`;
+            const stored = localStorage.getItem(sk);
+            const set = new Set(stored ? JSON.parse(stored) : []);
+            set.add(key);
+            localStorage.setItem(sk, JSON.stringify([...set]));
+          } catch {
+            // ignore
+          }
+        }
+      }
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_ALL);
+        const list = stored ? JSON.parse(stored) : [];
+        paidKeyList.forEach((key) => {
+          if (!list.includes(key)) list.push(key);
+        });
+        localStorage.setItem(STORAGE_KEY_ALL, JSON.stringify(list));
+      } catch {
+        // ignore
+      }
+      setPaidKeys((prev) => {
+        const next = new Set(prev);
+        paidKeyList.forEach((key) => next.add(key));
+        return next;
+      });
+      setPayouts((prev) =>
+        prev.map((p) =>
+          pending.some((x) => x.key === p.key)
+            ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0, paymentNote: '' }
+            : p
+        )
+      );
+      closePayAllModal(false);
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to pay all');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
 
   const handleExportExcel = () => {
     if (filteredPayouts.length === 0) {
@@ -928,6 +1006,7 @@ const DriverPayoutManagement = () => {
       'Fuel Expenses': p.fuelExpenses,
       'Start KM': p.startKM,
       'End KM': p.endKM,
+      'Total KM': p.totalKM ?? getTotalDrivenKM(p.startKM, p.endKM),
       'Excess KM': p.excessKM,
       'Excess KM Price': p.excessKMPrice,
       'Advance Pay': p.advancePay,
@@ -984,9 +1063,12 @@ const DriverPayoutManagement = () => {
     doc.save(`Driver_Payouts_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  const totalPages = Math.max(1, Math.ceil(filteredPayouts.length / ITEMS_PER_PAGE));
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const paginatedPayouts = filteredPayouts.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const totalPages = calcPayoutTotalPages(filteredPayouts.length, ITEMS_PER_PAGE);
+  const paginatedPayouts = getPayoutPageSlice(filteredPayouts, currentPage, ITEMS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, fromDate, toDate, selectedDriverId]);
 
   const summaryStats = useMemo(() => {
     const totalPayouts = payouts.length;
@@ -1074,119 +1156,105 @@ const DriverPayoutManagement = () => {
           ))}
         </div>
 
-        {/* Search and Controls */}
-        <div className="bg-white rounded-xl shadow-sm border border-[#D0E0DB] p-4 mb-6">
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3">
-            <div className="flex-1 relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by driver name, ID, vehicle or date..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm bg-gray-50"
-              />
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="flex flex-col">
-                <label className="text-xs font-medium text-[#6B8782] mb-1">From date</label>
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-gray-50"
-                />
-              </div>
-              <div className="flex flex-col">
-                <label className="text-xs font-medium text-[#6B8782] mb-1">To date</label>
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-gray-50"
-                />
-              </div>
-            </div>
-            <div className="flex flex-col min-w-[180px]">
-              <label className="text-xs font-medium text-[#6B8782] mb-1">Driver</label>
-              <div className="relative">
-                <select
-                  value={selectedDriverId}
-                  onChange={(e) => setSelectedDriverId(e.target.value)}
-                  className="w-full appearance-none px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent pr-8"
-                >
-                  <option value="">All drivers</option>
-                  {driverOptions.map((d) => (
-                    <option key={d.did} value={String(d.did)}>
-                      {d.driver_name || d.driver_id || `Driver ${d.did}`}
-                    </option>
-                  ))}
-                </select>
-                <Filter className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-              </div>
-            </div>
-            <div className="flex items-stretch sm:items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setFromDate('');
-                  setToDate('');
-                  setSelectedDriverId('');
-                }}
-                className="px-4 py-2 border border-gray-300 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 hover:bg-gray-50 text-gray-700 text-sm"
-              >
-                Clear filters
-              </button>
-              <button
-                type="button"
-                onClick={handleExportPDF}
-                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm"
-              >
-                Export PDF
-              </button>
-              <button
-                type="button"
-                onClick={handleExportExcel}
-                className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm"
-              >
-                <Download className="w-4 h-4" />
-                Export Excel
-              </button>
-            </div>
-          </div>
+        <p className="text-sm text-[#6B8782] mb-3">
+          Start KM, End KM, and Excess Price are loaded from each driver&apos;s{' '}
+          <strong className="text-[#0D5C4D]">Start KM / End KM</strong> records for that date
+          (Driver Details → Start KM/End KM). Update KM there, then refresh this list.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <button
+            type="button"
+            onClick={() => fetchDriverPayouts()}
+            disabled={loading}
+            className="px-4 py-2 text-sm font-medium rounded-lg border border-[#D0E0DB] bg-white text-[#0D5C4D] hover:bg-[#F0F4F3] disabled:opacity-50"
+          >
+            {loading ? 'Refreshing…' : 'Refresh payouts'}
+          </button>
         </div>
 
+        <PayoutFilterBar
+          idPrefix="driver-payout"
+          searchValue={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Name, ID, vehicle..."
+          fromDate={fromDate}
+          onFromDateChange={setFromDate}
+          toDate={toDate}
+          onToDateChange={setToDate}
+          entityFilter={{
+            label: 'Driver',
+            value: selectedDriverId,
+            onChange: setSelectedDriverId,
+            options: [
+              { value: '', label: 'All drivers' },
+              ...driverOptions.map((d) => ({
+                value: String(d.did),
+                label: d.driver_name || d.driver_id || `Driver ${d.did}`,
+              })),
+            ],
+          }}
+          onClear={() => {
+            setFromDate('');
+            setToDate('');
+            setSelectedDriverId('');
+            setSearchQuery('');
+          }}
+          onPayAll={openPayAllModal}
+          payAllDisabled={payAllTargets.length === 0}
+          payAllLoading={markingPaid}
+          onExportPDF={handleExportPDF}
+          onExportExcel={handleExportExcel}
+        />
+
         {/* Driver Payouts Table */}
-        <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#D4F4E8]">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Driver Name</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Driver ID</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Date</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Base Pay</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Fuel Expenses</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Start KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">End KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess KM Price</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Advance Pay</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Total Payout</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Action</th>
+        <div className={payoutTableWrap}>
+          <div className={payoutTableScroll}>
+            <table className={`${payoutTableBase} min-w-[1480px]`}>
+              <colgroup>
+                <col style={{ width: '11rem' }} />
+                <col style={{ width: '6.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5rem' }} />
+                <col style={{ width: '5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '6.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '6rem' }} />
+                <col style={{ width: '7.5rem' }} />
+                <col style={{ width: '18.5rem' }} />
+              </colgroup>
+              <thead className={payoutThead}>
+                <tr>
+                  <th className={`${driverTh} text-left`}>Driver</th>
+                  <th className={`${driverTh} text-left`}>ID</th>
+                  <th className={`${driverTh} text-left`}>Date</th>
+                  <th className={`${driverTh} text-right`}>Base Pay</th>
+                  <th className={`${driverTh} text-right`}>Fuel</th>
+                  <th className={`${driverTh} text-center`}>Start KM</th>
+                  <th className={`${driverTh} text-center`}>End KM</th>
+                  <th className={`${driverTh} text-center`}>Total KM</th>
+                  <th className={`${driverTh} text-center`}>Excess KM</th>
+                  <th className={`${driverTh} text-right`}>Excess Price</th>
+                  <th className={`${driverTh} text-right`}>Advance</th>
+                  <th className={`${driverTh} text-right`}>Total</th>
+                  <th className={`${driverTh} text-center`}>Status</th>
+                  <th className={`${driverTh} text-center`}>Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={payoutTbody}>
                 {loading ? (
                   <tr>
-                    <td colSpan="13" className="px-6 py-8 text-center text-[#6B8782]">
+                    <td colSpan={14} className={payoutEmptyCell}>
                       Loading driver payouts...
                     </td>
                   </tr>
                 ) : paginatedPayouts.length === 0 ? (
                   <tr>
-                    <td colSpan="13" className="px-6 py-8 text-center text-[#6B8782]">
+                    <td colSpan={14} className={payoutEmptyCell}>
                       No driver payouts found
                     </td>
                   </tr>
@@ -1194,74 +1262,133 @@ const DriverPayoutManagement = () => {
                   paginatedPayouts.map((payout, index) => (
                     <tr
                       key={payout.key}
-                      className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                        index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                      }`}
+                      className={payoutRow(index)}
                     >
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-[#0D5C4D] text-sm">{payout.driverName}</div>
-                        <div className="text-xs text-[#6B8782]">Vehicle: {payout.vehicle}</div>
+                      <td className={driverTd}>
+                        <div className="font-semibold leading-snug">{payout.driverName}</div>
+                        <div className="text-xs text-[#6B8782] mt-0.5 truncate max-w-[10rem]">
+                          {payout.vehicle || '—'}
+                        </div>
                       </td>
-                      <td className="px-6 py-4 text-sm font-medium text-[#0D5C4D]">{payout.driverCode}</td>
-                      <td className="px-6 py-4 text-sm text-[#0D5C4D]">
+                      <td className={`${driverTd} font-medium whitespace-nowrap`}>{payout.driverCode}</td>
+                      <td className={`${driverTd} whitespace-nowrap`}>
                         {payout.date ? new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB') : '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm font-medium text-[#0D5C4D]">₹{formatNum(payout.basePay)}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-red-600">-₹{formatNum(payout.fuelExpenses)}</td>
-                      <td className="px-6 py-4 text-sm text-[#0D5C4D]">
-                        {payout.startKM != null ? `${formatNum(payout.startKM)} km` : '—'}
+                      <td className={driverTdNum}>₹{formatNum(payout.basePay)}</td>
+                      <td className={`${driverTdNum} text-red-600`}>-₹{formatNum(payout.fuelExpenses)}</td>
+                      <td className={driverTdKm}>
+                        {payout.startKM != null ? `${formatNum(payout.startKM)}` : '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-[#0D5C4D]">
-                        {payout.endKM != null ? `${formatNum(payout.endKM)} km` : '—'}
+                      <td className={driverTdKm}>
+                        {payout.endKM != null ? `${formatNum(payout.endKM)}` : '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-[#0D5C4D]">
-                        {payout.excessKM != null && payout.excessKM > 0 ? `${formatNum(payout.excessKM)} km` : '—'}
+                      <td className={driverTdKm}>
+                        {(payout.totalKM ?? getTotalDrivenKM(payout.startKM, payout.endKM)) != null
+                          ? formatNum(payout.totalKM ?? getTotalDrivenKM(payout.startKM, payout.endKM))
+                          : '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm font-medium text-green-600">+₹{formatNum(payout.excessKMPrice || 0)}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-red-600">-₹{formatNum(payout.advancePay)}</td>
-                      <td className="px-6 py-4 text-sm font-bold text-[#0D5C4D]">₹{formatNum(payout.totalPayout)}</td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-block px-4 py-1.5 rounded-full text-xs font-medium ${getStatusColor(payout.status)}`}>
+                      <td className={driverTdKm}>
+                        {payout.excessKM != null && payout.excessKM > 0 ? formatNum(payout.excessKM) : '—'}
+                      </td>
+                      <td className={driverTdNum}>
+                        {payout.hasKmRecord ? (
+                          <span className="font-semibold text-[#047857]">
+                            ₹{formatNum(payout.excessKMPrice)}
+                          </span>
+                        ) : (
+                          <span className="text-[#6B8782]">—</span>
+                        )}
+                      </td>
+                      <td className={`${driverTdNum} text-red-600`}>-₹{formatNum(payout.advancePay)}</td>
+                      <td className={`${driverTdNum} font-bold`}>₹{formatNum(payout.totalPayout)}</td>
+                      <td className={`${driverTd} text-center`}>
+                        <span
+                          className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}
+                        >
                           {payout.status}
                         </span>
                         {payout.status === 'Partial' && (
-                          <div className="mt-1 text-[11px] text-[#0D5C4D]">
-                            Paid ₹{formatNum(payout.partialPaidAmount || 0)} | Bal ₹{formatNum(payout.remainingAmount || 0)}
+                          <div className="mt-1 text-[10px] text-[#6B8782] leading-tight">
+                            Paid ₹{formatNum(payout.partialPaidAmount || 0)}
+                            <br />
+                            Bal ₹{formatNum(payout.remainingAmount || 0)}
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 flex gap-2 items-center mt-4">
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/drivers/${payout.driverId}/daily-payout`)}
-                          className="px-3 py-1.5 text-xs font-medium text-[#0D5C4D] border border-[#0D5C4D] rounded-lg hover:bg-[#D4F4E8] transition-colors"
-                        >
-                          View
-                        </button>
-                        {payout.status !== 'Paid' ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => openPartialPaymentModal(payout)}
-                              disabled={markingPaid}
-                              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-                            >
-                              Partial
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handlePay(payout)}
-                              disabled={markingPaid}
-                              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
-                            >
-                              {markingPaid ? 'Saving...' : 'Pay'}
-                            </button>
-                          </>
-                        ) : (
-                          <span className="px-4 py-1.5 rounded-lg text-xs font-medium bg-gray-200 text-gray-700">
-                            {payout.status}
-                          </span>
-                        )}
+                      <td className={`${driverTd} text-center whitespace-nowrap`}>
+                        <div className={payoutActionRow}>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/drivers/${payout.driverId}/daily-payout`)}
+                            className={driverBtn.ghost}
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate('/start-end-km-management', {
+                                state: { driverId: payout.driverId },
+                              })
+                            }
+                            className={driverBtn.ghost}
+                            title="Edit Start/End KM for this driver"
+                          >
+                            KM
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate('/advance-pay-management', {
+                                state: { driverId: payout.driverId, date: payout.date },
+                              })
+                            }
+                            className={driverBtn.advance}
+                          >
+                            Advance
+                          </button>
+                          {payout.status === 'Pending' ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openPartialPaymentModal(payout)}
+                                disabled={markingPaid}
+                                className={driverBtn.partial}
+                              >
+                                Partial
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePay(payout)}
+                                disabled={markingPaid}
+                                className={driverBtn.pay}
+                              >
+                                {markingPaid ? '…' : 'Pay'}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {payout.status === 'Partial' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handlePay(payout)}
+                                  disabled={markingPaid}
+                                  className={driverBtn.pay}
+                                >
+                                  {markingPaid ? '…' : 'Pay'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleRevert(payout)}
+                                disabled={markingPaid}
+                                className={driverBtn.revert}
+                              >
+                                Revert
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1272,56 +1399,36 @@ const DriverPayoutManagement = () => {
 
 
 
-          {/* Pagination */}
-          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-            <div className="text-sm text-[#6B8782]">
-              Showing {filteredPayouts.length === 0 ? 0 : startIndex + 1}–{Math.min(startIndex + ITEMS_PER_PAGE, filteredPayouts.length)} of {filteredPayouts.length} daily payouts
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === 1
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &lt;
-              </button>
-              {Array.from({ length: totalPages }).map((_, idx) => {
-                const page = idx + 1;
-                return (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      currentPage === page
-                        ? 'bg-[#0D8568] text-white'
-                        : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === totalPages
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &gt;
-              </button>
-            </div>
-            <div className="text-sm font-semibold text-[#0D5C4D]">
+          <PayoutPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredPayouts.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            onClampPage={setCurrentPage}
+            itemLabel="payouts"
+          >
+            <span className="font-semibold text-[#0D5C4D]">
               Total Pending: <span className="text-[#0D7C66]">₹{formatNum(totalPending)}</span>
-            </div>
-          </div>
+            </span>
+          </PayoutPagination>
         </div>
+        <PayAllConfirmModal
+          open={payAllModalOpen}
+          fromDate={fromDate}
+          toDate={toDate}
+          rows={payAllSelected}
+          entityColumnLabel="Driver"
+          getEntityPrimary={(p) => p.driverName}
+          getEntitySecondary={(p) => p.driverCode}
+          getRowDate={(p) => p.date}
+          getRowKey={resolveKey}
+          getBalanceAmount={getBalanceAmount}
+          onRemove={removeFromPayAll}
+          onClose={() => closePayAllModal(markingPaid)}
+          onConfirm={confirmPayAll}
+          loading={markingPaid}
+        />
         {partialModal.open && partialModal.payout && (
           <div className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-white rounded-xl border border-[#D0E0DB] shadow-xl p-5">
@@ -1329,6 +1436,11 @@ const DriverPayoutManagement = () => {
               <p className="text-sm text-[#6B8782] mb-4">
                 {partialModal.payout.driverName} ({partialModal.payout.driverCode}) - Total: ₹{formatNum(partialModal.payout.totalPayout)}
               </p>
+              {Number(partialModal.payout.partialPaidAmount || 0) > 0 && (
+                <p className="text-xs text-[#0D5C4D] mb-3">
+                  Paid: ₹{formatNum(partialModal.payout.partialPaidAmount || 0)} | Balance: ₹{formatNum(getBalanceAmount(partialModal.payout))}
+                </p>
+              )}
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-[#6B8782] mb-1">Partial Amount</label>

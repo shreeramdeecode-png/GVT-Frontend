@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Phone, Mail, MapPin, TrendingUp, Package, ArrowLeft } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getSupplierById } from '../../../api/supplierApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 
 const SupplierDetails = () => {
@@ -20,11 +20,11 @@ const SupplierDetails = () => {
       try {
         const [supplierResponse, productsResponse] = await Promise.all([
           getSupplierById(id),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
         
         const supplierData = supplierResponse.data;
-        const allProducts = productsResponse.data || [];
+        const allProducts = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         
         let productIds = [];
         if (typeof supplierData.product_list === 'string') {

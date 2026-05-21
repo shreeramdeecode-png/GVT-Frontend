@@ -114,7 +114,6 @@ const ReportAirportView = () => {
     }
 
     let stage2LabourMap = {};
-    let stage2LabourWageMap = {};
     if (assignment.stage2_data) {
       try {
         const s2 = typeof assignment.stage2_data === 'string' ? JSON.parse(assignment.stage2_data) : assignment.stage2_data;
@@ -130,7 +129,6 @@ const ReportAirportView = () => {
       try {
         const s2Summary = typeof assignment.stage2_summary_data === 'string' ? JSON.parse(assignment.stage2_summary_data) : assignment.stage2_summary_data;
         const labourAssignments = s2Summary.labourAssignments || [];
-        const labourPrices = s2Summary.labourPrices || [];
         if (Object.keys(stage2LabourMap).length === 0 && labourAssignments.length > 0) {
           labourAssignments.forEach(lg => {
             (lg.assignments || []).forEach(a => {
@@ -149,10 +147,6 @@ const ReportAirportView = () => {
             if (Array.isArray(stage2LabourMap[k])) stage2LabourMap[k] = stage2LabourMap[k].join(', ');
           });
         }
-        labourPrices.forEach(lp => {
-          const name = lp.labourName || lp.labour;
-          if (name) stage2LabourWageMap[name] = parseFloat(lp.totalAmount ?? lp.labourWage ?? 0) || 0;
-        });
       } catch {}
     }
 
@@ -269,10 +263,6 @@ const ReportAirportView = () => {
     const dayName = orderDate.toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
     const shortDate = orderDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }).replace(/ /g, '/');
 
-    const defaultLabourRate = (() => {
-      const r = labourRates.find(x => x.labourType?.toLowerCase() === 'normal' && x.status === 'Active');
-      return r ? parseFloat(r.amount) : 0;
-    })();
     const driverRateObj = driverRates.find(r => r.deliveryType?.toLowerCase().includes('airport') && r.status === 'Active') || driverRates.find(r => r.status === 'Active');
     const driverWageDefault = driverRateObj ? parseFloat(driverRateObj.amount) : 0;
 
@@ -293,20 +283,12 @@ const ReportAirportView = () => {
       const cost10kg = count10kg * price10kg, cost5kg = count5kg * price5kg, costThermo = countThermo * priceThermo, costNetBag = countNetBag * priceNetBag;
       const totalBoxCost = cost10kg + cost5kg + costThermo + costNetBag;
 
-      const uniqueLabours = [...new Set(data.products.map(p => p.labour).filter(l => l && l !== '-' && l !== '').flatMap(l => String(l).split(',').map(n => n.trim())))];
-      let labourCost = 0;
-      uniqueLabours.forEach(name => {
-        const w = stage2LabourWageMap[name];
-        labourCost += (typeof w === 'number' && !isNaN(w)) ? w : defaultLabourRate;
-      });
-      const labourRate = uniqueLabours.length ? Math.round(labourCost / uniqueLabours.length) : defaultLabourRate;
-
       const pickupCost = getStockPrice('pickup') || 0;
       const tapeUnitPrice = getStockPrice('tape') || 0;
       const tapeCost = tapeUnitPrice * data.tapeQuantity + 0;
       const driverWage = driverWageDefault;
       const fuelExpense = getFuelExpenseForDriver(data.driverInfo?.did || data.driverInfo?.driver_id, order.order_received_date || order.createdAt);
-      const totalOverhead = labourCost + pickupCost + tapeCost + driverWage + fuelExpense;
+      const totalOverhead = pickupCost + tapeCost + driverWage + fuelExpense;
       const totalExpenses = totalBoxCost + totalOverhead;
       const vegExpenses = data.totalAmount;
       const grossWeight = data.totalWeight;
@@ -320,10 +302,6 @@ const ReportAirportView = () => {
       if (count5kg > 0) packagingRows.push({ label: '05 KG BOX', count: count5kg, rate: price5kg, total: cost5kg });
       if (countThermo > 0) packagingRows.push({ label: 'THERMO BOX', count: countThermo, rate: priceThermo, total: costThermo });
       if (countNetBag > 0) packagingRows.push({ label: 'NET BAG', count: countNetBag, rate: priceNetBag, total: costNetBag });
-      uniqueLabours.forEach(name => {
-        const w = stage2LabourWageMap[name];
-        packagingRows.push({ label: `LABOUR (${name})`, count: 1, rate: (typeof w === 'number' && !isNaN(w)) ? w : labourRate, total: (typeof w === 'number' && !isNaN(w)) ? w : labourRate, hideCost: true });
-      });
       packagingRows.push({ label: `${driverNameWithNum} PICKUP`, count: null, rate: null, total: driverWage, hideCost: true });
       packagingRows.push({ label: 'TAPE & PAPER', count: data.tapeQuantity ?? 0, rate: null, total: null });
       if (fuelExpense > 0) packagingRows.push({ label: 'FUEL EXPENSE', count: null, rate: null, total: fuelExpense });

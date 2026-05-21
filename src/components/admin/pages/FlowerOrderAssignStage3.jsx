@@ -122,6 +122,15 @@ const FlowerOrderAssignStage3 = () => {
     return match ? parseFloat(match[1]) : 0;
   };
 
+  const normalizeRowStatus = (status) =>
+    String(status || 'pending').toLowerCase().replace(/\s+/g, '');
+
+  // Keep pending editable; lock finalized/in-transit rows only.
+  const isAssignmentLocked = (row) => {
+    const normalized = normalizeRowStatus(row?.status);
+    return normalized === 'ontrip' || normalized === 'completed';
+  };
+
   // Load available drivers and product data
   useEffect(() => {
     const loadData = async () => {
@@ -273,21 +282,18 @@ const FlowerOrderAssignStage3 = () => {
                     }
                   }
 
-                  // Build box status map based on packedBoxes and status
-                  // Build box status map based on packedBoxes.
-                  // We only care about how many boxes are already packed
-                  // (completed). Pending count will be derived later as:
-                  // totalBoxes - availableBoxes.
-                  if (productId) {
-                    const packedBoxes = parseInt(assignment.packedBoxes) || 0;
-                    const status = (assignment.status || '').toLowerCase();
+                  // Avl box = packed boxes saved in Stage 2 (any labour status).
+                  // Pen box = order totalBoxes - avl (not yet packed for delivery).
+                  if (productId != null && productId !== '') {
+                    const packedBoxes = parseInt(assignment.packedBoxes, 10) || 0;
+                    const mapKey = String(productId);
 
-                    if (!stage2BoxStatusMap[productId]) {
-                      stage2BoxStatusMap[productId] = { available: 0 };
+                    if (!stage2BoxStatusMap[mapKey]) {
+                      stage2BoxStatusMap[mapKey] = { available: 0 };
                     }
 
-                    if (status === 'completed') {
-                      stage2BoxStatusMap[productId].available += packedBoxes;
+                    if (packedBoxes > 0) {
+                      stage2BoxStatusMap[mapKey].available += packedBoxes;
                     }
                   }
                 });
@@ -416,7 +422,7 @@ const FlowerOrderAssignStage3 = () => {
             rows = stage3Products.map((s3Product) => {
               const orderItem = orderItemsByOiid[s3Product.oiid] || {};
               const totalBoxes = s3Product.totalBoxes || parseNumBoxes(orderItem.num_boxes);
-              const boxStatus = stage2BoxStatusMap[s3Product.oiid] || { available: 0 };
+              const boxStatus = stage2BoxStatusMap[String(s3Product.oiid)] || { available: 0 };
               const availableBoxes = boxStatus.available || 0;
               const pendingBoxes = Math.max(totalBoxes - availableBoxes, 0);
               const productCount = productCountMap[s3Product.oiid] ?? '';
@@ -459,7 +465,7 @@ const FlowerOrderAssignStage3 = () => {
               } else {
                 grossWeightNum = netWeight + totalBoxes * 0.5;
               }
-              const boxStatus = stage2BoxStatusMap[item.oiid] || { available: 0 };
+              const boxStatus = stage2BoxStatusMap[String(item.oiid)] || { available: 0 };
               const availableBoxes = boxStatus.available || 0;
               const pendingBoxes = Math.max(totalBoxes - availableBoxes, 0);
               const productCount = productCountMap[item.oiid] ?? '';
@@ -501,13 +507,14 @@ const FlowerOrderAssignStage3 = () => {
     loadData();
   }, [orderData, id]);
 
-  // Helper function to get next available CT position for an airport
-  const getNextCTPositionForAirport = (airportName, currentRowId, numPkgs, currentRows) => {
+  // Helper function to get next available CT position per product split
+  const getNextCTPositionForAirport = (airportName, oiid, currentRowId, numPkgs, currentRows) => {
     if (!airportName) return 1;
 
-    // Get all rows assigned to this airport (excluding current row)
+    // Get rows for the same product split (excluding current row)
     const airportRows = currentRows.filter(row =>
       row.airportName === airportName &&
+      row.oiid === oiid &&
       row.id !== currentRowId &&
       row.ct
     );
@@ -591,6 +598,7 @@ const FlowerOrderAssignStage3 = () => {
 
   const handleNoOfPkgsChange = (index, value) => {
     const updatedRows = [...productRows];
+    if (isAssignmentLocked(updatedRows[index])) return;
     updatedRows[index].noOfPkgs = value;
     const currentRow = updatedRows[index];
     const avlBox = currentRow.availableBoxes ?? 0;
@@ -626,6 +634,7 @@ const FlowerOrderAssignStage3 = () => {
         // Get next available position for this airport (continuous across all products)
         const startPosition = getNextCTPositionForAirport(
           currentRow.airportName,
+          currentRow.oiid,
           currentRow.id,
           numPkgs,
           updatedRows
@@ -634,11 +643,15 @@ const FlowerOrderAssignStage3 = () => {
         const endPosition = startPosition + numPkgs - 1;
 
         // Check if it exceeds total boxes for THIS product
-        if (endPosition - startPosition + 1 <= currentRow.totalBoxes) {
+        const otherPackages = updatedRows
+          .filter((r) => r.oiid === currentRow.oiid && r.id !== currentRow.id)
+          .reduce((sum, r) => sum + (parseInt(r.noOfPkgs, 10) || 0), 0);
+        if (endPosition <= (currentRow.totalBoxes || 0) && otherPackages + numPkgs <= (currentRow.totalBoxes || 0)) {
           updatedRows[index].ct = `${startPosition}-${endPosition}`;
         } else {
           updatedRows[index].ct = '';
-          alert(`Cannot fit ${numPkgs} packages. Maximum available for this product: ${currentRow.totalBoxes}`);
+          const msg = `Cannot fit ${numPkgs}. Max ${currentRow.totalBoxes} boxes (${otherPackages} already assigned).`;
+          setNoOfPkgsWarning((prev) => ({ ...prev, [currentRow.id]: msg }));
         }
       } else {
         updatedRows[index].ct = '';
@@ -739,6 +752,7 @@ const FlowerOrderAssignStage3 = () => {
 
   const handleNoOfPkgsBlur = (index) => {
     const row = productRows[index];
+    if (isAssignmentLocked(row)) return;
     const value = row.noOfPkgs;
     const totalBoxes = row.totalBoxes || 0;
     const avlBox = row.availableBoxes ?? 0;
@@ -769,6 +783,7 @@ const FlowerOrderAssignStage3 = () => {
   };
 
   const handleDriverChange = (index, driverId) => {
+    if (isAssignmentLocked(productRows[index])) return;
     if (!driverId) {
       const updatedRows = [...productRows];
       updatedRows[index].selectedDriver = '';
@@ -819,6 +834,7 @@ const FlowerOrderAssignStage3 = () => {
 
   const handleAirportNameChange = (index, airportName) => {
     const currentRow = productRows[index];
+    if (isAssignmentLocked(currentRow)) return;
     const currentDriverId = currentRow.selectedDriver;
 
     // One driver per airport: if this row has a driver, they must stay on one airport
@@ -852,14 +868,16 @@ const FlowerOrderAssignStage3 = () => {
 
         const startPosition = getNextCTPositionForAirport(
           airportName,
+          row.oiid,
           row.id,
           numPkgs,
           updatedRows
         );
 
         const endPosition = startPosition + numPkgs - 1;
+        const otherPkgs = getTotalPackagesForProduct(row.oiid, row.id);
 
-        if (endPosition - startPosition + 1 <= row.totalBoxes) {
+        if (endPosition <= (row.totalBoxes || 0) && otherPkgs + numPkgs <= (row.totalBoxes || 0)) {
           updatedRows[index].ct = `${startPosition}-${endPosition}`;
         } else {
           updatedRows[index].ct = '';
@@ -873,6 +891,7 @@ const FlowerOrderAssignStage3 = () => {
   const handleAddCTAssignment = (oiid) => {
     const sameProductRows = productRows.filter(row => row.oiid === oiid);
     const firstRow = sameProductRows[0];
+    if (isAssignmentLocked(firstRow)) return;
 
     // Check if total packages already equals total boxes/bags
     const totalPackages = sameProductRows.reduce((sum, row) => sum + (parseInt(row.noOfPkgs) || 0), 0);
@@ -914,6 +933,8 @@ const FlowerOrderAssignStage3 = () => {
   const handleRemoveCTAssignment = (rowId, oiid) => {
     // Prevent removing the last assignment for a product
     const sameProductRows = productRows.filter(row => row.oiid === oiid);
+    const rowToRemove = sameProductRows.find((r) => r.id === rowId);
+    if (isAssignmentLocked(rowToRemove)) return;
     if (sameProductRows.length <= 1) {
       alert('Cannot remove the last assignment for a product');
       return;
@@ -1239,6 +1260,7 @@ const FlowerOrderAssignStage3 = () => {
                           }}
                           type="text"
                           value={row.noOfPkgs}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleNoOfPkgsChange(index, e.target.value)}
                           onBlur={() => handleNoOfPkgsBlur(index)}
                           onKeyDown={(e) => handleKeyDown(e, index, 0, productRows.length)}
@@ -1264,6 +1286,7 @@ const FlowerOrderAssignStage3 = () => {
                             if (el) inputGridRefs.current[`${index}-1`] = el;
                           }}
                           value={row.airportName}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleAirportNameChange(index, e.target.value)}
                           onKeyDown={(e) => handleKeyDown(e, index, 1, productRows.length)}
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
@@ -1288,6 +1311,7 @@ const FlowerOrderAssignStage3 = () => {
                             if (el) inputGridRefs.current[`${index}-2`] = el;
                           }}
                           value={row.selectedDriver}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleDriverChange(index, e.target.value)}
                           onKeyDown={(e) => handleKeyDown(e, index, 2, productRows.length)}
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
@@ -1317,6 +1341,7 @@ const FlowerOrderAssignStage3 = () => {
                         {isLastOfGroup && (
                           <button
                             onClick={() => handleAddCTAssignment(row.oiid)}
+                            disabled={isAssignmentLocked(row)}
                             className="flex items-center justify-center w-8 h-8 bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition-all hover:scale-105 shadow-md"
                             title="Add CT Range"
                           >
@@ -1326,6 +1351,7 @@ const FlowerOrderAssignStage3 = () => {
                         {sameProductRows.length > 1 && (
                           <button
                             onClick={() => handleRemoveCTAssignment(row.id, row.oiid)}
+                            disabled={isAssignmentLocked(row)}
                             className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-500 text-white rounded-md text-xs font-medium hover:bg-red-600 transition-all hover:scale-105 shadow-md"
                             title="Remove this CT range"
                           >
@@ -1896,5 +1922,128 @@ const FlowerOrderAssignStage3 = () => {
     </div>
   );
 };
+
+/** Split order / Stage 4 net & gross kg across Stage 3 routes by box count. */
+
+export const parseKg = (value) => {
+  if (value == null || value === '') return 0;
+  const n = parseFloat(String(value).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+export const normalizeProductKey = (name) =>
+  String(name || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, '')
+    .replace(/[^a-z0-9\u0B80-\u0BFF]/g, '');
+
+export const parseNumBoxes = (numBoxesStr) => {
+  if (numBoxesStr == null) return 0;
+  const match = String(numBoxesStr).match(/^(\d+(?:\.\d+)?)/);
+  return match ? parseFloat(match[1]) : parseInt(numBoxesStr, 10) || 0;
+};
+
+export const stage3RowKey = (row) =>
+  row.id ||
+  `${row.oiid}-${row.assignmentIndex ?? 0}-${row.airportName || ''}-${row.selectedDriver || ''}`;
+
+/**
+ * @param {Array} stage3Products
+ * @param {Array} orderItems
+ * @param {Object} stage4NetByProduct normalized product key -> total net kg
+ */
+export function buildStage3WeightSplitMap(stage3Products, orderItems = [], stage4NetByProduct = {}) {
+  const orderByOiid = {};
+  (orderItems || []).forEach((oi) => {
+    if (oi.oiid != null) orderByOiid[oi.oiid] = oi;
+  });
+
+  const byOiid = {};
+  (stage3Products || []).forEach((item) => {
+    if (item.oiid == null) return;
+    if (!byOiid[item.oiid]) byOiid[item.oiid] = [];
+    byOiid[item.oiid].push(item);
+  });
+
+  const splitByRowKey = new Map();
+
+  Object.entries(byOiid).forEach(([oiid, rows]) => {
+    const orderItem = orderByOiid[oiid] || {};
+    const productName = rows[0].product || rows[0].productName || orderItem.product_name;
+    const productKey = normalizeProductKey(productName);
+    const totalNet =
+      stage4NetByProduct[productKey] ?? parseKg(orderItem.net_weight) ?? 0;
+
+    let totalGross = parseKg(orderItem.gross_weight);
+    if (totalGross <= 0) {
+      totalGross = Math.max(...rows.map((r) => parseKg(r.grossWeight || r.gross_weight)), 0);
+    }
+    if (totalGross <= 0 && totalNet > 0) totalGross = totalNet;
+
+    const assignedBoxes = rows.reduce(
+      (s, r) => s + (parseInt(r.noOfPkgs ?? r.no_of_pkgs, 10) || 0),
+      0
+    );
+    const totalBoxes =
+      assignedBoxes > 0
+        ? assignedBoxes
+        : parseNumBoxes(orderItem.num_boxes) || rows[0].totalBoxes || 0;
+
+    rows.forEach((row) => {
+      const boxes = parseInt(row.noOfPkgs ?? row.no_of_pkgs, 10) || 0;
+      let ratio = 0;
+      if (totalBoxes > 0 && boxes > 0) {
+        ratio = boxes / totalBoxes;
+      } else if (rows.length === 1) {
+        ratio = 1;
+      }
+      const netKg = totalNet * ratio;
+      const grossKg = totalGross * ratio;
+      splitByRowKey.set(stage3RowKey(row), {
+        netKg,
+        grossKg,
+        displayKg: netKg > 0 ? netKg : grossKg,
+      });
+    });
+  });
+
+  return splitByRowKey;
+}
+
+export function getSplitWeightForRow(row, splitMap) {
+  const hit = splitMap.get(stage3RowKey(row));
+  if (hit) return hit;
+  const grossKg = parseKg(row.grossWeight || row.gross_weight);
+  const netKg = parseKg(row.netWeight || row.net_weight);
+  return {
+    netKg: netKg || grossKg,
+    grossKg,
+    displayKg: netKg > 0 ? netKg : grossKg,
+  };
+}
+
+/** Recalculate per-route grossWeight strings before save / display in Stage 3 assign UI. */
+export function applySplitWeightsToProductRows(rows, orderItems = [], stage4NetByProduct = {}) {
+  const splitMap = buildStage3WeightSplitMap(rows, orderItems, stage4NetByProduct);
+  return rows.map((row) => {
+    const { grossKg, netKg } = getSplitWeightForRow(row, splitMap);
+    return {
+      ...row,
+      grossWeight: grossKg > 0 ? `${grossKg.toFixed(2)} kg` : row.grossWeight,
+      splitNetKg: netKg,
+    };
+  });
+}
+
+export function assignDriverNetFromSplitProducts(productsByDriver) {
+  Object.values(productsByDriver || {}).forEach((driverData) => {
+    const sum = (driverData.products || []).reduce((s, p) => {
+      const net = parseFloat(p.netWeight);
+      if (net > 0) return s + net;
+      return s + parseKg(p.grossWeight);
+    }, 0);
+    if (sum > 0) driverData.stage4NetKg = sum;
+  });
+}
 
 export default FlowerOrderAssignStage3;

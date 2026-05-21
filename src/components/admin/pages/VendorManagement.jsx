@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, MoreVertical, Eye, Edit, Trash2, Download } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllVendors } from '../../../api/vendorApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 import * as XLSX from 'xlsx-js-style';
 import { usePermissions } from '../../../context/PermissionsContext';
@@ -37,10 +37,10 @@ const VendorDashboard = () => {
         setLoading(true);
         const [vendorsResponse, productsResponse] = await Promise.all([
           getAllVendors(1, 100),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
 
-        const products = productsResponse.data || [];
+        const products = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         const productMap = {};
         products.forEach(p => {
           productMap[p.pid] = p.product_name;

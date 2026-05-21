@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { createSupplier } from '../../../api/supplierApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts, mapProductsForDropdown } from '../../../api/productApi';
 import { createNotification } from '../../../api/notificationApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
 
@@ -49,9 +49,8 @@ const AddSupplierForm = () => {
   useEffect(() => {
     const fetchProducts = async () => {
       try {
-        const response = await getAllProducts(1, 100);
-        const products = response.data || [];
-        setAvailableVegetables(products.map(p => ({ id: p.pid, name: p.product_name })));
+        const products = await fetchAllProducts();
+        setAvailableVegetables(mapProductsForDropdown(products));
       } catch (error) {
         console.error('Failed to fetch products:', error);
       }

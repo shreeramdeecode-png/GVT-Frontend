@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { getFarmerById, updateFarmer } from '../../../api/farmerApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts, mapProductsForDropdown } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 
 const normalizePhoneWithCountryCode = (value) => {
@@ -69,10 +69,10 @@ const EditFarmer = () => {
       try {
         const [farmerResponse, productsResponse] = await Promise.all([
           getFarmerById(id),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
         
-        const products = productsResponse.data || [];
+        const products = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         const productMap = {};
         products.forEach(p => {
           productMap[p.pid] = p.product_name;
@@ -128,7 +128,7 @@ const EditFarmer = () => {
         }
         setSelectedVegetables(productIds);
         
-        setAvailableVegetables(products.map(p => ({ id: p.pid, name: p.product_name })));
+        setAvailableVegetables(mapProductsForDropdown(products));
       } catch (err) {
         console.error('Error fetching data:', err);
         setError('Failed to load data');

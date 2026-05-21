@@ -22,7 +22,7 @@ export const saveLocalOrder = async (orderId, data) => {
 
 export const getAllLocalOrders = async () => {
   try {
-    const response = await api.get('/local-order/list');
+    const response = await api.get('/local-order');
     return response.data;
   } catch (error) {
     console.error('Error fetching all local orders:', error);

@@ -10,7 +10,7 @@ import { getAllLabours, deleteLabour, getLabourById } from '../../../api/labourA
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { BASE_URL } from '../../../config/config';
-import { getLabourManagementPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
+import { getLabourManagementPayoutAmounts, formatInrPayout } from '../../../api/payoutApi';
 import * as XLSX from 'xlsx-js-style';
 
 const mapLabourStatus = (status) => {

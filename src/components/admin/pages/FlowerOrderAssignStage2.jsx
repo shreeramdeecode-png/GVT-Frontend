@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { Check, ChevronDown, Package, User } from 'lucide-react';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
@@ -12,6 +12,8 @@ import { getTapes } from '../../../api/inventoryApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
+import { computeExpectedExcessStock, formatExcessStockSaveMessage } from '../common/Stage2ExcessStockPreview';
+import Stage2ExcessStockPreview from '../common/Stage2ExcessStockPreview';
 
 const FlowerOrderAssignStage2 = () => {
   const navigate = useNavigate();
@@ -33,6 +35,7 @@ const FlowerOrderAssignStage2 = () => {
   
   // Refs for keyboard navigation
   const inputGridRefs = useRef({});
+  const excessStockPreview = useMemo(() => computeExpectedExcessStock(productRows), [productRows]);
 
   // Handle arrow key navigation between inputs
   const handleKeyDown = (e, rowIndex, colIndex, totalRows) => {
@@ -510,6 +513,69 @@ const FlowerOrderAssignStage2 = () => {
     loadData();
   }, [id]);
 
+  const getPackedBoxesCap = (row) => {
+    const numBoxes = parseInt(row.num_boxes, 10) || 0;
+    const picked = parseInt(row.pickedBoxes, 10) || 0;
+    return numBoxes > 0 ? numBoxes : picked;
+  };
+
+  const updatePackedBoxesField = (rowId, labourName, value) => {
+    const rowIndex = productRows.findIndex((r) => r.id === rowId);
+    if (rowIndex === -1) return;
+    const row = productRows[rowIndex];
+    const packedCap = getPackedBoxesCap(row);
+    const packed = value === '' ? '' : parseInt(value, 10);
+    if (value !== '' && (Number.isNaN(packed) || packed < 0)) return;
+    const labours = Array.isArray(row.labour) ? row.labour : [];
+    const otherPacked = labours
+      .filter((name) => name !== labourName)
+      .reduce((sum, name) => {
+        const key = `${row.id}-${name}`;
+        return sum + (parseInt(row[`packedBoxes_${key}`], 10) || 0);
+      }, 0);
+    if (value !== '' && otherPacked + packed > packedCap) {
+      const maxAllowed = Math.max(packedCap - otherPacked, 0);
+      alert(`Total packed boxes cannot exceed No. of Boxes/Bags (${packedCap}). Max allowed for ${labourName}: ${maxAllowed}`);
+      return;
+    }
+    const updatedRows = [...productRows];
+    updatedRows[rowIndex][`packedBoxes_${rowId}-${labourName}`] = value;
+    setProductRows(updatedRows);
+  };
+
+  const validatePackedBoxesBeforeSave = () => {
+    const packedByProduct = {};
+    for (const row of productRows) {
+      if (!row.labour || !Array.isArray(row.labour)) continue;
+      const packedCap = getPackedBoxesCap(row);
+      let rowPackedTotal = 0;
+      for (const labourName of row.labour) {
+        const key = `${row.id}-${labourName}`;
+        const packed = parseInt(row[`packedBoxes_${key}`], 10) || 0;
+        rowPackedTotal += packed;
+      }
+      if (rowPackedTotal > packedCap) {
+        alert(`${row.product}: total packed boxes (${rowPackedTotal}) cannot exceed No. of Boxes/Bags (${packedCap})`);
+        return false;
+      }
+      if (!packedByProduct[row.oiid]) {
+        packedByProduct[row.oiid] = {
+          total: 0,
+          limit: parseInt(row.num_boxes, 10) || 0,
+          product: row.product
+        };
+      }
+      packedByProduct[row.oiid].total += rowPackedTotal;
+    }
+    for (const entry of Object.values(packedByProduct)) {
+      if (entry.limit > 0 && entry.total > entry.limit) {
+        alert(`${entry.product}: total packed boxes (${entry.total}) cannot exceed order boxes (${entry.limit})`);
+        return false;
+      }
+    }
+    return true;
+  };
+
   const handleSaveStage2 = async () => {
     // Validate that all products have labour assigned (check only first vendor row)
     const firstVendorRows = productRows.filter(row => row.isFirstVendor);
@@ -518,6 +584,7 @@ const FlowerOrderAssignStage2 = () => {
       alert(`Please assign labour for: ${missingLabour.map(r => r.product).join(', ')}`);
       return;
     }
+    if (!validatePackedBoxesBeforeSave()) return;
 
     try {
       // Prepare product assignments for backend
@@ -543,6 +610,7 @@ const FlowerOrderAssignStage2 = () => {
           entityType: row.entityType,
           entityName: row.entityName,
           pickedQuantity: parseFloat(row.pickedQuantity) || 0,
+          pickedWeight: parseFloat(row.pickedWeight) || 0,
           wastage: parseFloat(row.wastage) || 0,
           packedAmount: parseFloat(row.packedAmount) || 0,
           reuse: row.isFirstVendor ? (parseFloat(row.reuse) || 0) : 0,
@@ -667,7 +735,7 @@ const FlowerOrderAssignStage2 = () => {
       const response = await updateStage2Assignment(id, stage2Data);
 
       if (response.success) {
-        alert('Stage 2 saved successfully! Stock has been updated.');
+        alert(formatExcessStockSaveMessage(excessStockPreview));
         navigate(`/order-assign/flower/stage3/${id}`, { state: { orderData } });
       } else {
         alert('Stage 2 saved but there might be issues: ' + (response.message || 'Unknown error'));
@@ -1376,18 +1444,13 @@ const FlowerOrderAssignStage2 = () => {
                                       inputGridRefs.current[`summary-${labourName}-${idx}-2`] = el;
                                     }
                                   }}
-                                  type="text"
+                                  type="number"
+                                  min="0"
+                                  max={getPackedBoxesCap(row) || undefined}
                                   value={row[`packedBoxes_${row.id}-${labourName}`] || ''}
-                                  placeholder="Enter boxes"
+                                  placeholder={`Max ${getPackedBoxesCap(row)}`}
                                   onKeyDown={(e) => handleSummaryKeyDown(e, labourName, idx, 2, rows.length)}
-                                  onChange={(e) => {
-                                    const updatedRows = [...productRows];
-                                    const rowIndex = productRows.findIndex(r => r.id === row.id);
-                                    if (rowIndex !== -1) {
-                                      updatedRows[rowIndex][`packedBoxes_${row.id}-${labourName}`] = e.target.value;
-                                      setProductRows(updatedRows);
-                                    }
-                                  }}
+                                  onChange={(e) => updatePackedBoxesField(row.id, labourName, e.target.value)}
                                   className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
                                 />
                               </td>
@@ -1531,18 +1594,13 @@ const FlowerOrderAssignStage2 = () => {
                                     inputGridRefs.current[`summary-mobile-${labourName}-${idx}-2`] = el;
                                   }
                                 }}
-                                type="text"
+                                type="number"
+                                min="0"
+                                max={getPackedBoxesCap(row) || undefined}
                                 value={row[`packedBoxes_${row.id}-${labourName}`] || ''}
-                                placeholder="Enter boxes"
+                                placeholder={`Max ${getPackedBoxesCap(row)}`}
                                 onKeyDown={(e) => handleSummaryKeyDown(e, labourName, idx, 2, rows.length)}
-                                onChange={(e) => {
-                                  const updatedRows = [...productRows];
-                                  const rowIndex = productRows.findIndex(r => r.id === row.id);
-                                  if (rowIndex !== -1) {
-                                    updatedRows[rowIndex][`packedBoxes_${row.id}-${labourName}`] = e.target.value;
-                                    setProductRows(updatedRows);
-                                  }
-                                }}
+                                onChange={(e) => updatePackedBoxesField(row.id, labourName, e.target.value)}
                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
                               />
                             </div>
@@ -1625,6 +1683,8 @@ const FlowerOrderAssignStage2 = () => {
         </div>
         </>
       )}
+
+      <Stage2ExcessStockPreview productRows={productRows} />
 
       {/* Action Buttons */}
       <div className="flex flex-col sm:flex-row justify-end gap-3">

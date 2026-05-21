@@ -3,9 +3,9 @@ import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { Search, Plus, MoreVertical, Download } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllSuppliers, deleteSupplier } from '../../../api/supplierApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
-import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../api/payoutApi';
 import * as XLSX from 'xlsx-js-style';
 
 const SupplierDashboard = () => {
@@ -51,10 +51,10 @@ const SupplierDashboard = () => {
       try {
         const [suppliersResponse, productsResponse] = await Promise.all([
           getAllSuppliers(),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
 
-        const products = productsResponse.data || [];
+        const products = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         const productMap = {};
         products.forEach(p => {
           productMap[p.pid] = p.product_name;

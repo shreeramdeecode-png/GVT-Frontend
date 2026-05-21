@@ -15,6 +15,32 @@ import { getAllProductCounts } from '../../../api/productCountApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
+/** Normalize order/availability product labels for farmer dropdown matching. */
+export const normalizeProductLabel = (name) => {
+  if (!name) return '';
+  let s = String(name).replace(/^\d+\s*-\s*/, '').trim();
+  const paren = s.indexOf('(');
+  if (paren > 0) s = s.slice(0, paren).trim();
+  return s.toLowerCase();
+};
+
+export const productsMatchForFarmerFilter = (orderProduct, availabilityName) => {
+  const a = normalizeProductLabel(orderProduct);
+  const b = normalizeProductLabel(availabilityName);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+};
+
+export const filterFarmersByProductAvailability = (farmers, farmerAvailability, productName) => {
+  if (!farmers?.length) return [];
+  const withMatch = farmers.filter((farmer) => {
+    const availability = farmerAvailability[farmer.fid] || [];
+    return availability.some((item) =>
+      productsMatchForFarmerFilter(productName, item.vegetable_name)
+    );
+  });
+  return withMatch.length > 0 ? withMatch : farmers;
+};
 
 const FlowerOrderAssignStage1 = () => {
   const navigate = useNavigate();
@@ -1017,7 +1043,7 @@ const FlowerOrderAssignStage1 = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {displayRows.map((row, index) => {
-                const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
+                const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '').trim();
                 const stockQty = availableStock[productName] || 0;
 
                 return (
@@ -1160,10 +1186,10 @@ const FlowerOrderAssignStage1 = () => {
                         }}
                       >
                         <option value="">Select name...</option>
-                        {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
-                          const availability = farmerAvailability[farmer.fid] || [];
-                          return availability.some(item => item.vegetable_name === productName);
-                        }).map(farmer => (
+                        {row.entityType === 'farmer' && sortDropdownObjects(
+                          filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                          (farmer) => farmer.farmer_name
+                        ).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                         ))}
                         {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
@@ -1185,7 +1211,7 @@ const FlowerOrderAssignStage1 = () => {
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
                         {(() => {
-                          const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
+                          const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '').trim();
                           const entityStock = availableStock[productName] || 0;
                           return (
                             <>
@@ -1326,7 +1352,7 @@ const FlowerOrderAssignStage1 = () => {
           {(() => {
             const displayRows = getDisplayRows();
             return displayRows.map((row, index) => {
-            const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
+            const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '').trim();
             const stockQty = availableStock[productName] || 0;
 
             return (
@@ -1456,10 +1482,10 @@ const FlowerOrderAssignStage1 = () => {
                       }}
                     >
                       <option value="">Select name...</option>
-                      {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
-                        const availability = farmerAvailability[farmer.fid] || [];
-                        return availability.some(item => item.vegetable_name === productName);
-                      }).map(farmer => (
+                      {row.entityType === 'farmer' && sortDropdownObjects(
+                        filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                        (farmer) => farmer.farmer_name
+                      ).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                       ))}
                       {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
@@ -1485,7 +1511,7 @@ const FlowerOrderAssignStage1 = () => {
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Entity Stock</label>
                     <div className="flex items-center gap-2">
                       {(() => {
-                        const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
+                        const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '').trim();
                         const entityStock = availableStock[productName] || 0;
                         return (
                           <>

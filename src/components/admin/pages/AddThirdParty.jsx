@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { createThirdParty } from '../../../api/thirdPartyApi';
-import { getAllProducts } from '../../../api/productApi'; // Import product API
+import { fetchAllProducts, mapProductsForDropdown } from '../../../api/productApi';
 import { createNotification } from '../../../api/notificationApi';
 
 const AddThirdParty = () => {
@@ -35,9 +35,8 @@ const AddThirdParty = () => {
   useEffect(() => {
     const fetchProducts = async () => {
       try {
-        const response = await getAllProducts(1, 100);
-        const products = response.data || [];
-        setAvailableVegetables(products.map(p => ({ id: p.pid, name: p.product_name })));
+        const products = await fetchAllProducts();
+        setAvailableVegetables(mapProductsForDropdown(products));
       } catch (error) {
         console.error('Failed to fetch products:', error);
       }

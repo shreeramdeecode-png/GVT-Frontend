@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, ChevronDown, Download } from 'lucide-react';
+import PayoutFilterBar, { PayAllConfirmModal } from '../common/PayoutFilterBar';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getAllFarmers } from '../../../api/farmerApi';
-import { getPaidRecords, markAsPaid } from '../../../api/payoutApi';
-import { filterByDateRange, TIME_FILTER_OPTIONS } from '../../../utils/dateRangeFilter';
+import { getPaidRecords, markAsPaid, unmarkAsPaid, markPartialPaid } from '../../../api/payoutApi';
+import PayoutPagination from '../common/PayoutPagination';
 
+import { sortPayoutsByStatus, filterPayoutsByDateRange, buildEntityFilterOptions, usePayoutPayAll, buildPayoutExportSubtitle, exportPayoutExcel, exportPayoutPdf, payoutExportDate, payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
 const PayoutManagement = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const pageFromUrl = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
   const [activeTab, setActiveTab] = useState('farmer');
   const [searchQuery, setSearchQuery] = useState('');
-  const [timeFilter, setTimeFilter] = useState('All Time');
-  const [showTimeFilter, setShowTimeFilter] = useState(false);
-  const timeFilterRef = useRef(null);
+  const [selectedFarmerId, setSelectedFarmerId] = useState('');
   const skipFilterPageReset = useRef(true);
   const [currentPage, setCurrentPage] = useState(pageFromUrl);
-  const itemsPerPage = 7;
+  const itemsPerPage = DEFAULT_PAYOUT_PAGE_SIZE;
 
   useEffect(() => {
     setCurrentPage(pageFromUrl);
@@ -38,6 +38,11 @@ const PayoutManagement = () => {
   const [loading, setLoading] = useState(true);
   const [payouts, setPayouts] = useState([]); // farmer payouts only
   const [markingPaid, setMarkingPaid] = useState(false);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [partialModal, setPartialModal] = useState({ open: false, payout: null });
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialNote, setPartialNote] = useState('');
 
   const formatCurrency = (amount) => {
     const value = Number.isFinite(amount) ? amount : 0;
@@ -222,8 +227,25 @@ const PayoutManagement = () => {
     }
   };
 
+  const farmerFilterOptions = useMemo(
+    () =>
+      buildEntityFilterOptions(payouts, {
+        idField: 'entity_id',
+        nameField: 'farmerName',
+        codeField: 'farmerCode',
+        allLabel: 'All farmers',
+      }),
+    [payouts]
+  );
+
   const filteredPayouts = useMemo(() => {
-    let list = filterByDateRange([...payouts], timeFilter, (p) => p.lastSupplied);
+    let list = [...payouts];
+    if (fromDate || toDate) {
+      list = filterPayoutsByDateRange(list, fromDate, toDate, (p) => p.lastSupplied);
+    }
+    if (selectedFarmerId) {
+      list = list.filter((p) => String(p.entity_id) === selectedFarmerId);
+    }
     const query = searchQuery.trim().toLowerCase();
     if (query) {
       list = list.filter(
@@ -234,8 +256,19 @@ const PayoutManagement = () => {
           String(p.orderId ?? '').toLowerCase().includes(query)
       );
     }
-    return list;
-  }, [payouts, searchQuery, timeFilter]);
+    return sortPayoutsByStatus(list);
+  }, [payouts, searchQuery, fromDate, toDate, selectedFarmerId]);
+
+  const {
+    payAllModalOpen,
+    payAllSelected,
+    payAllTargets,
+    openPayAllModal,
+    closePayAllModal,
+    removeFromPayAll,
+    getBalanceAmount,
+    resolveKey,
+  } = usePayoutPayAll(filteredPayouts, { totalField: 'amount' });
 
   useEffect(() => {
     if (skipFilterPageReset.current) {
@@ -243,21 +276,10 @@ const PayoutManagement = () => {
       return;
     }
     setPage(1);
-  }, [searchQuery, timeFilter, setPage]);
+  }, [searchQuery, fromDate, toDate, selectedFarmerId, setPage]);
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showTimeFilter && !timeFilterRef.current?.contains(event.target)) {
-        setShowTimeFilter(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showTimeFilter]);
-
-  const totalPages = Math.ceil(filteredPayouts.length / itemsPerPage) || 1;
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedPayouts = filteredPayouts.slice(startIndex, startIndex + itemsPerPage);
+  const totalPages = calcPayoutTotalPages(filteredPayouts.length, itemsPerPage);
+  const paginatedPayouts = getPayoutPageSlice(filteredPayouts, currentPage, itemsPerPage);
 
   const summaryStats = useMemo(() => {
     const totalPayouts = payouts.length;
@@ -313,13 +335,133 @@ const PayoutManagement = () => {
         ...payout
       };
       await markAsPaid('farmer', rowData);
-      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Paid' } : p)));
+      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0 } : p)));
     } catch (error) {
       console.error('Error marking farmer payout as paid:', error);
       alert(error?.message || error?.error || 'Failed to mark as paid');
     } finally {
       setMarkingPaid(false);
     }
+  };
+
+  const handleRevert = async (payout) => {
+    try {
+      setMarkingPaid(true);
+      await unmarkAsPaid('farmer', { key: payout.id, id: payout.id, reference_key: payout.id });
+      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Pending', partialPaidAmount: 0, remainingAmount: p.amount } : p)));
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to revert payout');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const handlePartialPay = async () => {
+    if (!partialModal.payout) return;
+    const payout = partialModal.payout;
+    const entered = Number(partialAmount);
+    const alreadyPaid = Number(payout.partialPaidAmount || 0);
+    const total = Number(payout.amount || 0);
+    if (!Number.isFinite(entered) || entered <= 0) {
+      alert('Enter a valid partial amount');
+      return;
+    }
+    const cumulative = alreadyPaid + entered;
+    if (total > 0 && cumulative >= total) {
+      alert('Total partial paid must be less than total payout');
+      return;
+    }
+    try {
+      setMarkingPaid(true);
+      await markPartialPaid('farmer', {
+        key: payout.id,
+        id: payout.id,
+        entity_id: payout.entity_id,
+        amount: total,
+        partial_amount: entered,
+        partial_paid_total: cumulative,
+        note: partialNote
+      });
+      setPayouts((prev) =>
+        prev.map((p) =>
+          p.id === payout.id
+            ? { ...p, status: 'Partial', partialPaidAmount: cumulative, remainingAmount: Math.max(total - cumulative, 0) }
+            : p
+        )
+      );
+      setPartialModal({ open: false, payout: null });
+      setPartialAmount('');
+      setPartialNote('');
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to save partial payment');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const confirmPayAll = async () => {
+    const pending = payAllSelected;
+    if (pending.length === 0) return;
+    setMarkingPaid(true);
+    try {
+      for (const payout of pending) {
+        const rowData = {
+          key: payout.id,
+          id: payout.id,
+          entity_id: payout.entity_id ?? payout.id.split('_')[1],
+          orderId: payout.orderId ?? payout.id.split('_')[0],
+          amount: Number(payout.amount) || 0,
+          farmerName: payout.farmerName,
+          farmerCode: payout.farmerCode,
+          quantityKg: payout.quantityKg,
+          lastSupplied: payout.lastSupplied,
+          ...payout
+        };
+        await markAsPaid('farmer', rowData);
+      }
+      setPayouts((prev) =>
+        prev.map((p) => {
+          const inList = pending.some((x) => x.id === p.id);
+          return inList ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0 } : p;
+        })
+      );
+      closePayAllModal(false);
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to pay all');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const handleExportExcel = () => {
+    exportPayoutExcel(
+      filteredPayouts.map((p) => ({
+        'Farmer Name': p.farmerName,
+        'Farmer ID': p.farmerCode,
+        'Last Supplied': payoutExportDate(p.lastSupplied),
+        'Quantity (kg)': p.quantityKg,
+        Amount: p.amount,
+        Status: p.status,
+      })),
+      { sheetName: 'Farmer Payouts', filePrefix: 'Farmer_Payouts' }
+    );
+  };
+
+  const handleExportPDF = () => {
+    exportPayoutPdf({
+      title: 'Farmer Payouts',
+      subtitle: buildPayoutExportSubtitle({ fromDate, toDate }),
+      headers: ['Farmer', 'ID', 'Last Supplied', 'Qty (kg)', 'Amount', 'Status'],
+      body: filteredPayouts.map((p) => [
+        p.farmerName,
+        p.farmerCode,
+        payoutExportDate(p.lastSupplied),
+        String(p.quantityKg ?? '—'),
+        `Rs. ${Number(p.amount || 0).toLocaleString('en-IN')}`,
+        p.status,
+      ]),
+      filePrefix: 'Farmer_Payouts',
+    });
   };
 
   return (
@@ -384,128 +526,99 @@ const PayoutManagement = () => {
           ))}
         </div>
 
-        {/* Search and Controls */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              {/* Search */}
-            <div className="flex-1 relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by order ID, farmer name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm bg-gray-50"
-              />
-            </div>
+        <PayoutFilterBar
+          idPrefix="farmer-payout"
+          searchValue={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Order ID, farmer name..."
+          fromDate={fromDate}
+          onFromDateChange={setFromDate}
+          toDate={toDate}
+          onToDateChange={setToDate}
+          entityFilter={{
+            label: 'Farmer',
+            value: selectedFarmerId,
+            onChange: setSelectedFarmerId,
+            options: farmerFilterOptions,
+          }}
+          onClear={() => {
+            setSearchQuery('');
+            setFromDate('');
+            setToDate('');
+            setSelectedFarmerId('');
+          }}
+          onPayAll={openPayAllModal}
+          payAllDisabled={payAllTargets.length === 0}
+          payAllLoading={markingPaid}
+          onExportPDF={handleExportPDF}
+          onExportExcel={handleExportExcel}
+        />
 
-            <div className="relative" ref={timeFilterRef}>
-              <button
-                type="button"
-                onClick={() => setShowTimeFilter(!showTimeFilter)}
-                className="flex items-center gap-2 px-4 py-3 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors w-full sm:w-auto justify-center"
-              >
-                <span className="text-gray-700 text-sm">{timeFilter}</span>
-                <ChevronDown className="w-4 h-4 text-gray-500" />
-              </button>
-              {showTimeFilter && (
-                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-                  {TIME_FILTER_OPTIONS.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => {
-                        setTimeFilter(option);
-                        setShowTimeFilter(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Export Button */}
-            <button className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm">
-              <Download className="w-4 h-4" />
-              Export
-            </button>
-          </div>
-        </div>
-
-        {/* Payouts Table */}
-        <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#D4F4E8]">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Farmer Name
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Quantity Supplied
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Amount
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Action
-                  </th>
+        <div className={payoutTableWrap}>
+          <div className={payoutTableScroll}>
+            <table className={`${payoutTableBase} table-fixed w-full min-w-[720px]`}>
+              <colgroup>
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '20%' }} />
+              </colgroup>
+              <thead className={payoutThead}>
+                <tr>
+                  <th className={`${payoutTh} text-left`}>Farmer</th>
+                  <th className={`${payoutTh} text-right`}>Qty (kg)</th>
+                  <th className={`${payoutTh} text-right`}>Amount</th>
+                  <th className={`${payoutTh} text-center`}>Status</th>
+                  <th className={`${payoutTh} text-center`}>Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={payoutTbody}>
                 {loading ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-8 text-center text-[#6B8782]">
-                      Loading farmer payouts...
-                    </td>
+                    <td colSpan={5} className={payoutEmptyCell}>Loading farmer payouts...</td>
                   </tr>
                 ) : paginatedPayouts.length === 0 ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-8 text-center text-[#6B8782]">
-                      No farmer payouts found
-                    </td>
+                    <td colSpan={5} className={payoutEmptyCell}>No farmer payouts found</td>
                   </tr>
                 ) : (
                   paginatedPayouts.map((payout, index) => (
-                    <tr
-                      key={payout.id}
-                      className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                        index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                      }`}
-                    >
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-[#0D5C4D] text-sm">{payout.farmerName}</div>
-                        <div className="text-xs text-[#6B8782]">
-                          Last supplied: {payout.lastSupplied ? new Date(payout.lastSupplied).toLocaleDateString('en-IN') : '-'}
+                    <tr key={payout.id} className={payoutRow(index)}>
+                      <td className={payoutTd}>
+                        <div className="font-semibold leading-snug">{payout.farmerName}</div>
+                        <div className="text-xs text-[#6B8782] mt-0.5">
+                          Last: {payout.lastSupplied ? new Date(payout.lastSupplied).toLocaleDateString('en-IN') : '—'}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-[#0D5C4D]">
-                          {payout.quantityKg.toFixed(2)} kg
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-bold text-[#0D5C4D]">
-                          {formatCurrency(payout.amount)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {payout.status === 'Paid' ? (
-                          <span className="inline-block px-4 py-1.5 rounded-full text-xs font-medium bg-[#D4F4E8] text-[#047857]">
-                            Paid
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handlePay(payout)}
-                            disabled={markingPaid}
-                            className="px-6 py-2 rounded-lg text-xs font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60"
-                          >
-                            {markingPaid ? 'Saving...' : 'Pay'}
-                          </button>
+                      <td className={payoutTdNum}>{payout.quantityKg.toFixed(2)}</td>
+                      <td className={`${payoutTdNum} font-bold`}>{formatCurrency(payout.amount)}</td>
+                      <td className={payoutTdCenter}>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>
+                          {payout.status}
+                        </span>
+                        {payout.status === 'Partial' && (
+                          <div className="mt-1 text-[10px] text-[#6B8782] leading-tight">
+                            Paid {formatCurrency(payout.partialPaidAmount || 0)}
+                            <br />
+                            Bal {formatCurrency(payout.remainingAmount || getBalanceAmount(payout))}
+                          </div>
                         )}
+                      </td>
+                      <td className={`${payoutTdCenter} whitespace-nowrap`}>
+                        <div className={payoutActionRow}>
+                          {payout.status !== 'Paid' && (
+                            <>
+                              <button type="button" onClick={() => { setPartialModal({ open: true, payout }); setPartialAmount(''); setPartialNote(''); }} disabled={markingPaid} className={payoutBtn.partial}>Partial</button>
+                              <button type="button" onClick={() => handlePay(payout)} disabled={markingPaid} className={payoutBtn.pay}>
+                                {payout.status === 'Partial' ? `Pay Bal ${formatCurrency(getBalanceAmount(payout))}` : 'Pay'}
+                              </button>
+                            </>
+                          )}
+                          {(payout.status === 'Paid' || payout.status === 'Partial') && (
+                            <button type="button" onClick={() => handleRevert(payout)} disabled={markingPaid} className={payoutBtn.revert}>Revert</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -516,55 +629,72 @@ const PayoutManagement = () => {
 
 
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-            <div className="text-sm text-[#6B8782]">
-              Showing {filteredPayouts.length === 0 ? 0 : startIndex + 1} to{' '}
-              {Math.min(startIndex + itemsPerPage, filteredPayouts.length)} of {filteredPayouts.length} Farmers
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === 1
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &lt;
+          <PayoutPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredPayouts.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setPage}
+            onClampPage={setPage}
+            itemLabel="farmers"
+          />
+        </div>
+      </div>
+
+      <PayAllConfirmModal
+        open={payAllModalOpen}
+        fromDate={fromDate}
+        toDate={toDate}
+        rows={payAllSelected}
+        entityColumnLabel="Farmer"
+        getEntityPrimary={(p) => p.farmerName}
+        getEntitySecondary={(p) => p.farmerCode}
+        getRowDate={(p) => p.lastSupplied}
+        getRowKey={resolveKey}
+        getBalanceAmount={getBalanceAmount}
+        onRemove={removeFromPayAll}
+        onClose={() => closePayAllModal(markingPaid)}
+        onConfirm={confirmPayAll}
+        loading={markingPaid}
+      />
+      {partialModal.open && partialModal.payout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Partial payment</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              {partialModal.payout.farmerName} — Total {formatCurrency(partialModal.payout.amount)}
+            </p>
+            {Number(partialModal.payout.partialPaidAmount || 0) > 0 && (
+              <p className="text-xs text-[#0D5C4D] mb-3">
+                Paid: {formatCurrency(partialModal.payout.partialPaidAmount || 0)} | Balance: {formatCurrency(getBalanceAmount(partialModal.payout))}
+              </p>
+            )}
+            <input
+              type="number"
+              min="0"
+              value={partialAmount}
+              onChange={(e) => setPartialAmount(e.target.value)}
+              placeholder="Amount"
+              className="w-full mb-3 px-3 py-2 border border-gray-300 rounded-lg"
+            />
+            <input
+              type="text"
+              value={partialNote}
+              onChange={(e) => setPartialNote(e.target.value)}
+              placeholder="Note (optional)"
+              className="w-full mb-4 px-3 py-2 border border-gray-300 rounded-lg"
+            />
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => setPartialModal({ open: false, payout: null })} className="px-4 py-2 border rounded-lg">
+                Cancel
               </button>
-              {Array.from({ length: totalPages }).map((_, idx) => {
-                const page = idx + 1;
-                return (
-                  <button
-                    key={page}
-                    onClick={() => setPage(page)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      currentPage === page
-                        ? 'bg-[#0D8568] text-white'
-                        : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === totalPages
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &gt;
+              <button type="button" onClick={handlePartialPay} disabled={markingPaid} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+                Save
               </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

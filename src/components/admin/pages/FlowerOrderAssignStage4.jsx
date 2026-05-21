@@ -966,6 +966,20 @@ const FlowerOrderAssignStage4 = () => {
 
     const displayRows = React.useMemo(() => getDisplayRows(), [productRows, remainingRowAssignments, isBoxBasedOrder]);
 
+    const getEffectiveWeightForAmount = (row) => {
+        const pickedQty = parseFloat(row.assignedQty) || 0;
+        if (pickedQty > 0) return pickedQty;
+        if (isBoxBasedOrder) {
+            const pickedBoxes = parseFloat(row.assignedBoxes) || 0;
+            const neededBoxes = parseFloat(row.num_boxes) || 0;
+            const neededWeight = parseFloat(row.net_weight) || 0;
+            if (pickedBoxes > 0 && neededBoxes > 0 && neededWeight > 0) {
+                return (pickedBoxes / neededBoxes) * neededWeight;
+            }
+        }
+        return parseFloat(row.net_weight) || 0;
+    };
+
     // Check if we have any routes with drivers assigned
     const hasAssignedDrivers = deliveryRoutes.some(route => route.driver);
     const groupedDriverAssignments = getGroupedDriverAssignments();
@@ -1414,7 +1428,7 @@ const FlowerOrderAssignStage4 = () => {
                                                 <span className="text-sm font-bold text-emerald-600">
                                                     ₹{(() => {
                                                         const price = parseFloat(row.price) || 0;
-                                                        const weight = parseFloat(row.net_weight) || parseFloat(row.assignedQty) || 0;
+                                                        const weight = getEffectiveWeightForAmount(row);
                                                         return (price * weight).toFixed(2);
                                                     })()}
                                                 </span>
@@ -1768,7 +1782,7 @@ const FlowerOrderAssignStage4 = () => {
                                             <span className="text-lg font-bold text-emerald-600">
                                                 ₹{(() => {
                                                     const price = parseFloat(row.price) || 0;
-                                                    const weight = parseFloat(row.net_weight) || parseFloat(row.assignedQty) || 0;
+                                                    const weight = getEffectiveWeightForAmount(row);
                                                     return (price * weight).toFixed(2);
                                                 })()}
                                             </span>
@@ -1804,7 +1818,7 @@ const FlowerOrderAssignStage4 = () => {
                                 displayRows.forEach(row => {
                                     const price = parseFloat(row.price) || 0;
                                     // Use net_weight which contains the actual kg for both box and weight-based orders
-                                    const weight = parseFloat(row.net_weight) || parseFloat(row.assignedQty) || 0;
+                                    const weight = getEffectiveWeightForAmount(row);
                                     total += price * weight;
                                 });
                                 return total.toFixed(2);
@@ -1825,7 +1839,7 @@ const FlowerOrderAssignStage4 = () => {
                             <p className="text-lg font-semibold text-gray-900">
                                 {(() => {
                                     const totalKg = displayRows.reduce((sum, row) => {
-                                        const weight = parseFloat(row.net_weight) || parseFloat(row.assignedQty) || 0;
+                                        const weight = getEffectiveWeightForAmount(row);
                                         return sum + weight;
                                     }, 0);
                                     return `${totalKg.toFixed(2)} kg`;

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { getSupplierById, updateSupplier } from '../../../api/supplierApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts, mapProductsForDropdown } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
 
 const normalizePhoneWithCountryCode = (value) => {
@@ -69,10 +69,11 @@ const EditSupplier = () => {
       try {
         const [supplierResponse, productsResponse] = await Promise.all([
           getSupplierById(id),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
         
         const supplier = supplierResponse.data;
+        const allProducts = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         setFormData({
           supplierName: supplier.supplier_name || '',
           place: supplier.place || '',
@@ -99,7 +100,6 @@ const EditSupplier = () => {
           setProfileImagePreview(`${BASE_URL}${supplier.profile_image}`);
         }
 
-        const allProducts = productsResponse.data || [];
         setProducts(allProducts);
 
         let productIds = [];

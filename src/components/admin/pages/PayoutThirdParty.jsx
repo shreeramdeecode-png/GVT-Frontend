@@ -1,24 +1,29 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ChevronDown, Download } from 'lucide-react';
+import PayoutFilterBar, { PayAllConfirmModal } from '../common/PayoutFilterBar';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getAllThirdParties } from '../../../api/thirdPartyApi';
-import { getPaidRecords, markAsPaid } from '../../../api/payoutApi';
-import { filterByDateRange, TIME_FILTER_OPTIONS } from '../../../utils/dateRangeFilter';
+import { getPaidRecords, markAsPaid, markPartialPaid, unmarkAsPaid } from '../../../api/payoutApi';
+import PayoutPagination from '../common/PayoutPagination';
 
+import { filterPayoutsByDateRange, buildEntityFilterOptions, usePayoutPayAll, buildPayoutExportSubtitle, exportPayoutExcel, exportPayoutPdf, payoutExportDate, payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
 const PayoutThirdParty = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
-  const [timeFilter, setTimeFilter] = useState('All Time');
-  const [showTimeFilter, setShowTimeFilter] = useState(false);
-  const timeFilterRef = useRef(null);
+  const [selectedThirdPartyId, setSelectedThirdPartyId] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 7;
+  const itemsPerPage = DEFAULT_PAYOUT_PAGE_SIZE;
 
   const [loading, setLoading] = useState(true);
   const [payouts, setPayouts] = useState([]);
   const [markingPaid, setMarkingPaid] = useState(false);
+  const [partialModal, setPartialModal] = useState({ open: false, payout: null });
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialNote, setPartialNote] = useState('');
 
   const formatCurrency = (amount) => {
     const value = Number.isFinite(amount) ? amount : 0;
@@ -47,9 +52,13 @@ const PayoutThirdParty = () => {
       const thirdParties = thirdRes?.data || [];
       const paidList = paidRes?.data ?? paidRes?.paidRecords ?? paidRes?.records ?? (Array.isArray(paidRes) ? paidRes : []);
       const paidSet = new Set();
+      const paidMap = new Map();
       paidList.forEach((item) => {
         const k = item?.reference_key ?? item?.key ?? item?.id ?? (item?.orderId != null && item?.entity_id != null ? `${item.orderId}_${item.entity_id}` : (typeof item === 'string' ? item : null));
-        if (k) paidSet.add(k);
+        if (k) {
+          paidSet.add(k);
+          paidMap.set(k, item);
+        }
       });
 
       const thirdMap = new Map(
@@ -155,6 +164,20 @@ const PayoutThirdParty = () => {
               const third = thirdMap.get(group.thirdId);
               const rowId = `${order.oid}_${group.thirdId}`;
               const statusFromOrder = order.payment_status === 'paid' || order.payment_status === 'completed';
+              const paymentRecord = paidMap.get(rowId);
+              const paymentStatus = String(paymentRecord?.payment_status || '').toLowerCase();
+              const partialPaidAmount = parseFloat(
+                paymentRecord?.row_data?.partialPaidAmount ??
+                paymentRecord?.row_data?.partial_amount ??
+                paymentRecord?.partialPaidAmount ??
+                paymentRecord?.partial_amount ??
+                0
+              ) || 0;
+              const status = paymentStatus === 'partial'
+                ? 'Partial'
+                : paidSet.has(rowId)
+                  ? 'Paid'
+                  : (statusFromOrder ? 'Paid' : 'Pending');
               processedPayouts.push({
                 id: rowId,
                 orderId: order.oid,
@@ -164,7 +187,9 @@ const PayoutThirdParty = () => {
                 lastSupplied: order.order_received_date || order.createdAt,
                 quantityKg: totalQty,
                 amount: totalAmount,
-                status: paidSet.has(rowId) ? 'Paid' : (statusFromOrder ? 'Paid' : 'Pending')
+                status,
+                partialPaidAmount,
+                remainingAmount: status === 'Partial' ? Math.max(totalAmount - partialPaidAmount, 0) : 0
               });
             }
           });
@@ -175,7 +200,13 @@ const PayoutThirdParty = () => {
 
       await Promise.all(assignmentPromises);
 
-      processedPayouts.sort((a, b) => new Date(b.lastSupplied) - new Date(a.lastSupplied));
+      const statusOrder = { Pending: 0, Partial: 1, Paid: 2 };
+      processedPayouts.sort((a, b) => {
+        const sa = statusOrder[a.status] ?? 0;
+        const sb = statusOrder[b.status] ?? 0;
+        if (sa !== sb) return sa - sb;
+        return new Date(b.lastSupplied) - new Date(a.lastSupplied);
+      });
 
       setPayouts(processedPayouts);
     } catch (error) {
@@ -185,8 +216,25 @@ const PayoutThirdParty = () => {
     }
   };
 
+  const thirdPartyFilterOptions = useMemo(
+    () =>
+      buildEntityFilterOptions(payouts, {
+        idField: 'entity_id',
+        nameField: 'thirdName',
+        codeField: 'thirdCode',
+        allLabel: 'All third parties',
+      }),
+    [payouts]
+  );
+
   const filteredPayouts = useMemo(() => {
-    let list = filterByDateRange([...payouts], timeFilter, (p) => p.lastSupplied);
+    let list = [...payouts];
+    if (fromDate || toDate) {
+      list = filterPayoutsByDateRange(list, fromDate, toDate, (p) => p.lastSupplied);
+    }
+    if (selectedThirdPartyId) {
+      list = list.filter((p) => String(p.entity_id) === selectedThirdPartyId);
+    }
     const query = searchQuery.trim().toLowerCase();
     if (query) {
       list = list.filter(
@@ -196,26 +244,33 @@ const PayoutThirdParty = () => {
           String(p.orderId ?? '').toLowerCase().includes(query)
       );
     }
+    const statusOrder = { Pending: 0, Partial: 1, Paid: 2 };
+    list.sort((a, b) => {
+      const sa = statusOrder[a.status] ?? 0;
+      const sb = statusOrder[b.status] ?? 0;
+      if (sa !== sb) return sa - sb;
+      return new Date(b.lastSupplied) - new Date(a.lastSupplied);
+    });
     return list;
-  }, [payouts, searchQuery, timeFilter]);
+  }, [payouts, searchQuery, fromDate, toDate, selectedThirdPartyId]);
+
+  const {
+    payAllModalOpen,
+    payAllSelected,
+    payAllTargets,
+    openPayAllModal,
+    closePayAllModal,
+    removeFromPayAll,
+    getBalanceAmount,
+    resolveKey,
+  } = usePayoutPayAll(filteredPayouts, { totalField: 'amount' });
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, timeFilter]);
+  }, [searchQuery, fromDate, toDate, selectedThirdPartyId]);
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showTimeFilter && !timeFilterRef.current?.contains(event.target)) {
-        setShowTimeFilter(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showTimeFilter]);
-
-  const totalPages = Math.ceil(filteredPayouts.length / itemsPerPage) || 1;
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedPayouts = filteredPayouts.slice(startIndex, startIndex + itemsPerPage);
+  const totalPages = calcPayoutTotalPages(filteredPayouts.length, itemsPerPage);
+  const paginatedPayouts = getPayoutPageSlice(filteredPayouts, currentPage, itemsPerPage);
 
   const summaryStats = useMemo(() => {
     const totalPayouts = payouts.length;
@@ -253,15 +308,6 @@ const PayoutThirdParty = () => {
     { label: 'Average Payout', value: formatCurrency(summaryStats.averagePayout) }
   ];
 
-  const getStatusColor = (status) => {
-    return status === 'Paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700';
-  };
-
-  const getActionButton = (status) =>
-    status === 'Paid'
-      ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-      : 'bg-emerald-600 hover:bg-emerald-700 text-white';
-
   const handlePay = async (payout) => {
     if (payout.status === 'Paid') return;
     try {
@@ -280,13 +326,127 @@ const PayoutThirdParty = () => {
         ...payout
       };
       await markAsPaid('third_party', rowData);
-      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Paid' } : p)));
+      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0 } : p)));
     } catch (error) {
       console.error('Error marking third party payout as paid:', error);
       alert(error?.message || error?.error || 'Failed to mark as paid');
     } finally {
       setMarkingPaid(false);
     }
+  };
+
+  const handleRevert = async (payout) => {
+    try {
+      setMarkingPaid(true);
+      await unmarkAsPaid('third_party', { key: payout.id, id: payout.id, reference_key: payout.id });
+      setPayouts((prev) => prev.map((p) => (p.id === payout.id ? { ...p, status: 'Pending', partialPaidAmount: 0, remainingAmount: p.amount } : p)));
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to revert payout');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const openPartialPaymentModal = (payout) => {
+    setPartialAmount('');
+    setPartialNote('');
+    setPartialModal({ open: true, payout });
+  };
+
+  const closePartialPaymentModal = () => {
+    setPartialModal({ open: false, payout: null });
+    setPartialAmount('');
+    setPartialNote('');
+  };
+
+  const handlePartialPay = async () => {
+    if (!partialModal.payout) return;
+    const payout = partialModal.payout;
+    const entered = Number(partialAmount);
+    const alreadyPaid = Number(payout.partialPaidAmount || 0);
+    const total = Number(payout.amount || 0);
+    if (!Number.isFinite(entered) || entered <= 0) return alert('Enter a valid partial amount');
+    const cumulative = alreadyPaid + entered;
+    if (total > 0 && cumulative >= total) return alert('Total partial paid must be less than total payout');
+    try {
+      setMarkingPaid(true);
+      await markPartialPaid('third_party', {
+        key: payout.id,
+        id: payout.id,
+        entity_id: payout.entity_id,
+        amount: total,
+        partial_amount: entered,
+        partial_paid_total: cumulative,
+        note: partialNote
+      });
+      setPayouts((prev) =>
+        prev.map((p) =>
+          p.id === payout.id
+            ? { ...p, status: 'Partial', partialPaidAmount: cumulative, remainingAmount: Math.max(total - cumulative, 0) }
+            : p
+        )
+      );
+      closePartialPaymentModal();
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to save partial payment');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const confirmPayAll = async () => {
+    const pending = payAllSelected;
+    if (pending.length === 0) return;
+    setMarkingPaid(true);
+    try {
+      for (const payout of pending) {
+        await markAsPaid('third_party', {
+          key: payout.id,
+          id: payout.id,
+          entity_id: payout.entity_id,
+          orderId: payout.orderId,
+          amount: Number(payout.amount) || 0,
+          ...payout
+        });
+      }
+      setPayouts((prev) => prev.map((p) => (pending.some((x) => x.id === p.id) ? { ...p, status: 'Paid', partialPaidAmount: 0, remainingAmount: 0 } : p)));
+      closePayAllModal(false);
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to pay all');
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  const handleExportExcel = () => {
+    exportPayoutExcel(
+      filteredPayouts.map((p) => ({
+        'Third Party Name': p.thirdName,
+        'Third Party ID': p.thirdCode,
+        'Last Supplied': payoutExportDate(p.lastSupplied),
+        'Quantity (kg)': p.quantityKg,
+        Amount: p.amount,
+        Status: p.status,
+      })),
+      { sheetName: 'Third Party Payouts', filePrefix: 'ThirdParty_Payouts' }
+    );
+  };
+
+  const handleExportPDF = () => {
+    exportPayoutPdf({
+      title: 'Third Party Payouts',
+      subtitle: buildPayoutExportSubtitle({ fromDate, toDate }),
+      headers: ['Third Party', 'ID', 'Last Supplied', 'Qty (kg)', 'Amount', 'Status'],
+      body: filteredPayouts.map((p) => [
+        p.thirdName,
+        p.thirdCode,
+        payoutExportDate(p.lastSupplied),
+        String(p.quantityKg ?? '—'),
+        `Rs. ${Number(p.amount || 0).toLocaleString('en-IN')}`,
+        p.status,
+      ]),
+      filePrefix: 'ThirdParty_Payouts',
+    });
   };
 
   return (
@@ -346,138 +506,94 @@ const PayoutThirdParty = () => {
           ))}
         </div>
 
-        {/* Search and Controls */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* Search */}
-            <div className="flex-1 relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by order ID, third party name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm bg-gray-50"
-              />
-            </div>
-
-            <div className="relative" ref={timeFilterRef}>
-              <button
-                type="button"
-                onClick={() => setShowTimeFilter(!showTimeFilter)}
-                className="flex items-center gap-2 px-4 py-3 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors w-full sm:w-auto justify-center"
-              >
-                <span className="text-gray-700 text-sm">{timeFilter}</span>
-                <ChevronDown className="w-4 h-4 text-gray-500" />
-              </button>
-              {showTimeFilter && (
-                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-                  {TIME_FILTER_OPTIONS.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => {
-                        setTimeFilter(option);
-                        setShowTimeFilter(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Export Button */}
-            <button className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm">
-              <Download className="w-4 h-4" />
-              Export
-            </button>
-          </div>
-        </div>
+        <PayoutFilterBar
+          idPrefix="thirdparty-payout"
+          searchValue={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Order ID, third party name..."
+          fromDate={fromDate}
+          onFromDateChange={setFromDate}
+          toDate={toDate}
+          onToDateChange={setToDate}
+          entityFilter={{
+            label: 'Third party',
+            value: selectedThirdPartyId,
+            onChange: setSelectedThirdPartyId,
+            options: thirdPartyFilterOptions,
+          }}
+          onClear={() => {
+            setSearchQuery('');
+            setFromDate('');
+            setToDate('');
+            setSelectedThirdPartyId('');
+          }}
+          onPayAll={openPayAllModal}
+          payAllDisabled={payAllTargets.length === 0}
+          payAllLoading={markingPaid}
+          onExportPDF={handleExportPDF}
+          onExportExcel={handleExportExcel}
+        />
 
         {/* Payouts Table */}
-        <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#D4F4F8]">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Third Party Name
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Third Party ID
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Quantity Supplied (kg)
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Amount
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">
-                    Action
-                  </th>
+        <div className={payoutTableWrap}>
+          <div className={payoutTableScroll}>
+            <table className={`${payoutTableBase} min-w-[900px]`}>
+              <colgroup>
+                <col style={{ width: '28%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '24%' }} />
+              </colgroup>
+              <thead className={payoutThead}>
+                <tr>
+                  <th className={`${payoutTh} text-left`}>Third Party Name</th>
+                  <th className={`${payoutTh} text-left`}>Third Party ID</th>
+                  <th className={`${payoutTh} text-right`}>Qty (kg)</th>
+                  <th className={`${payoutTh} text-right`}>Amount</th>
+                  <th className={`${payoutTh} text-center`}>Status</th>
+                  <th className={`${payoutTh} text-center`}>Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={payoutTbody}>
                 {loading ? (
-                  <tr>
-                    <td colSpan="5" className="px-6 py-8 text-center text-[#6B8782]">
-                      Loading third-party payouts...
-                    </td>
-                  </tr>
+                  <tr><td colSpan={6} className={payoutEmptyCell}>Loading third-party payouts...</td></tr>
                 ) : paginatedPayouts.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" className="px-6 py-8 text-center text-[#6B8782]">
-                      No third-party payouts found
-                    </td>
-                  </tr>
+                  <tr><td colSpan={6} className={payoutEmptyCell}>No third-party payouts found</td></tr>
                 ) : (
                   paginatedPayouts.map((payout, index) => (
-                    <tr
-                      key={payout.id}
-                      className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                        index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                      }`}
-                    >
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-[#0D5C4D] text-sm">{payout.thirdName}</div>
-                        <div className="text-xs text-[#6B8782]">
-                          Last supplied: {payout.lastSupplied ? new Date(payout.lastSupplied).toLocaleDateString('en-IN') : '-'}
+                    <tr key={payout.id} className={payoutRow(index)}>
+                      <td className={payoutTd}>
+                        <div className="font-semibold leading-snug">{payout.thirdName}</div>
+                        <div className="text-xs text-[#6B8782] mt-0.5">
+                          Last: {payout.lastSupplied ? new Date(payout.lastSupplied).toLocaleDateString('en-IN') : '—'}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-[#0D5C4D]">{payout.thirdCode}</div>
+                      <td className={`${payoutTd} font-medium`}>{payout.thirdCode}</td>
+                      <td className={payoutTdNum}>{payout.quantityKg.toFixed(2)}</td>
+                      <td className={`${payoutTdNum} font-bold`}>{formatCurrency(payout.amount)}</td>
+                      <td className={payoutTdCenter}>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>{payout.status}</span>
+                        {payout.status === 'Partial' && (
+                          <div className="mt-1 text-[10px] text-[#6B8782] leading-tight">
+                            Paid {formatCurrency(payout.partialPaidAmount || 0)}<br />Bal {formatCurrency(payout.remainingAmount || getBalanceAmount(payout))}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-[#0D5C4D]">
-                          {payout.quantityKg.toFixed(2)}
+                      <td className={`${payoutTdCenter} whitespace-nowrap`}>
+                        <div className={payoutActionRow}>
+                          {payout.status === 'Paid' ? (
+                            <button type="button" onClick={() => handleRevert(payout)} disabled={markingPaid} className={payoutBtn.revert}>Revert</button>
+                          ) : (
+                            <>
+                              <button type="button" onClick={() => openPartialPaymentModal(payout)} disabled={markingPaid} className={payoutBtn.partial}>Partial</button>
+                              <button type="button" onClick={() => handlePay(payout)} disabled={markingPaid} className={payoutBtn.pay}>
+                                {markingPaid ? '…' : payout.status === 'Partial' ? `Pay Bal ${formatCurrency(getBalanceAmount(payout))}` : 'Pay'}
+                              </button>
+                            </>
+                          )}
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-bold text-[#0D5C4D]">
-                          {formatCurrency(payout.amount)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-block px-4 py-1.5 rounded-full text-xs font-medium ${getStatusColor(payout.status)}`}>
-                          {payout.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => payout.status === 'Pending' ? handlePay(payout) : undefined}
-                          disabled={markingPaid && payout.status === 'Pending'}
-                          className={`px-6 py-2 rounded-lg text-xs font-semibold transition-colors ${getActionButton(
-                            payout.status
-                          )} ${payout.status === 'Pending' ? 'cursor-pointer' : 'cursor-default'}`}
-                        >
-                          {payout.status === 'Paid' ? 'View' : markingPaid ? 'Saving...' : 'Pay'}
-                        </button>
                       </td>
                     </tr>
                   ))
@@ -486,54 +602,57 @@ const PayoutThirdParty = () => {
             </table>
           </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-            <div className="text-sm text-[#6B8782]">
-              Showing {filteredPayouts.length === 0 ? 0 : startIndex + 1} to{' '}
-              {Math.min(startIndex + itemsPerPage, filteredPayouts.length)} of {filteredPayouts.length} Third Parties
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === 1
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &lt;
-              </button>
-              {Array.from({ length: totalPages }).map((_, idx) => {
-                const page = idx + 1;
-                return (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      currentPage === page
-                        ? 'bg-[#0D8568] text-white'
-                        : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className={`px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === totalPages
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-[#6B8782] hover:bg-[#D0E0DB]'
-                }`}
-              >
-                &gt;
-              </button>
+          <PayoutPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredPayouts.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onClampPage={setCurrentPage}
+            itemLabel="third parties"
+          />
+        </div>
+        <PayAllConfirmModal
+          open={payAllModalOpen}
+          fromDate={fromDate}
+          toDate={toDate}
+          rows={payAllSelected}
+          entityColumnLabel="Third party"
+          getEntityPrimary={(p) => p.thirdName}
+          getEntitySecondary={(p) => p.thirdCode}
+          getRowDate={(p) => p.lastSupplied}
+          getRowKey={resolveKey}
+          getBalanceAmount={getBalanceAmount}
+          onRemove={removeFromPayAll}
+          onClose={() => closePayAllModal(markingPaid)}
+          onConfirm={confirmPayAll}
+          loading={markingPaid}
+        />
+        {partialModal.open && partialModal.payout && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+            <div className="w-full max-w-md bg-white rounded-xl shadow-xl p-5">
+              <h3 className="text-lg font-semibold text-[#0D5C4D] mb-1">Partial Payment</h3>
+              <p className="text-sm text-[#6B8782] mb-4">
+                {partialModal.payout.thirdName} — Total {formatCurrency(partialModal.payout.amount)}
+              </p>
+              {Number(partialModal.payout.partialPaidAmount || 0) > 0 && (
+                <p className="text-xs text-[#0D5C4D] mb-3">
+                  Paid: {formatCurrency(partialModal.payout.partialPaidAmount || 0)} | Balance: {formatCurrency(getBalanceAmount(partialModal.payout))}
+                </p>
+              )}
+              <div className="space-y-3">
+                <input type="number" min="0" step="0.01" value={partialAmount} onChange={(e) => setPartialAmount(e.target.value)} placeholder="Partial amount" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                <textarea value={partialNote} onChange={(e) => setPartialNote(e.target.value)} placeholder="Note (optional)" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm min-h-[84px]" />
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" onClick={closePartialPaymentModal} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+                <button type="button" onClick={handlePartialPay} disabled={markingPaid} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
+                  {markingPaid ? 'Saving...' : 'Save Partial'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -16,7 +16,10 @@ import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { FileText, FileSpreadsheet } from 'lucide-react';
+import PayoutPagination from '../common/PayoutPagination';
 
+import { payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
 const ReportPayout = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -28,7 +31,7 @@ const ReportPayout = () => {
     dateTo: ''
   });
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 7;
+  const itemsPerPage = DEFAULT_PAYOUT_PAGE_SIZE;
 
   useEffect(() => {
     fetchAllData();
@@ -825,15 +828,8 @@ const ReportPayout = () => {
     ];
   }, [filteredPayouts]);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredPayouts.length / itemsPerPage);
-  const paginatedPayouts = filteredPayouts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-  const handlePageChange = (page) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-    }
-  };
+  const totalPages = calcPayoutTotalPages(filteredPayouts.length, itemsPerPage);
+  const paginatedPayouts = getPayoutPageSlice(filteredPayouts, currentPage, itemsPerPage);
 
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -1034,42 +1030,48 @@ const ReportPayout = () => {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB] shadow-lg">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-[#0D8568] text-white">
-                <th className="px-6 py-4 text-left text-sm font-semibold">Order ID</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">Recipient</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">Type</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">Amount</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">Date</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">Status</th>
+      <div className={payoutTableWrap}>
+        <div className={payoutTableScroll}>
+          <table className={`${payoutTableBase} min-w-[900px]`}>
+            <colgroup>
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '24%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '20%' }} />
+            </colgroup>
+            <thead className={payoutThead}>
+              <tr>
+                <th className={`${payoutTh} text-left`}>Order ID</th>
+                <th className={`${payoutTh} text-left`}>Recipient</th>
+                <th className={`${payoutTh} text-center`}>Type</th>
+                <th className={`${payoutTh} text-right`}>Amount</th>
+                <th className={`${payoutTh} text-left`}>Date</th>
+                <th className={`${payoutTh} text-center`}>Status</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={payoutTbody}>
               {paginatedPayouts.length > 0 ? (
                 paginatedPayouts.map((payout, index) => (
-                  <tr key={index} className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'}`}>
-                    <td className="px-6 py-4 text-sm text-[#0D5C4D] font-medium">{payout.orderId}</td>
-                    <td className="px-6 py-4 font-semibold text-[#0D5C4D]">{payout.recipient}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium 
-                                                ${payout.entityType === 'farmer' ? 'bg-[#D1FAE5] text-[#065F46]' :
+                  <tr key={index} className={payoutRow(index)}>
+                    <td className={`${payoutTd} font-medium`}>{payout.orderId}</td>
+                    <td className={`${payoutTd} font-semibold`}>{payout.recipient}</td>
+                    <td className={payoutTdCenter}>
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold
+                        ${payout.entityType === 'farmer' ? 'bg-[#D1FAE5] text-[#065F46]' :
                           payout.entityType === 'supplier' ? 'bg-[#DBEAFE] text-[#1E40AF]' :
                           payout.entityType === 'thirdParty' ? 'bg-[#FEF3C7] text-[#92400E]' :
                           payout.entityType === 'driver' ? 'bg-[#E0E7FF] text-[#3730A3]' :
                           payout.entityType === 'labour' ? 'bg-[#FCE7F3] text-[#831843]' :
-                            'bg-gray-200 text-gray-700'}`}>
+                          'bg-gray-200 text-gray-700'}`}>
                         {payout.entityType === 'thirdParty' ? 'Third Party' : payout.entityType.charAt(0).toUpperCase() + payout.entityType.slice(1)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm font-bold text-[#0D5C4D]">₹{payout.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="px-6 py-4 text-sm text-[#0D5C4D]">{new Date(payout.orderDate).toLocaleDateString('en-GB')}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 w-fit 
-                                                ${payout.status === 'Paid' ? 'bg-[#4ED39A] text-white' : 'bg-red-500 text-white'}`}>
-                        <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
+                    <td className={`${payoutTdNum} font-bold`}>₹{payout.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className={`${payoutTd} whitespace-nowrap`}>{new Date(payout.orderDate).toLocaleDateString('en-GB')}</td>
+                    <td className={payoutTdCenter}>
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>
                         {payout.status}
                       </span>
                     </td>
@@ -1077,7 +1079,7 @@ const ReportPayout = () => {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-[#6B8782]">
+                  <td colSpan={6} className={payoutEmptyCell}>
                     No payouts found matching your filters.
                   </td>
                 </tr>
@@ -1086,51 +1088,15 @@ const ReportPayout = () => {
           </table>
         </div>
 
-        {/* Footer / Pagination */}
-        <div className="flex flex-col sm:flex-row items-center justify-between px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB] gap-4">
-          <div className="text-sm text-[#6B8782]">
-            Showing {paginatedPayouts.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} to {Math.min(currentPage * itemsPerPage, filteredPayouts.length)} of {filteredPayouts.length} payouts
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              className={`px-3 py-2 rounded-lg transition-colors ${currentPage === 1 ? 'text-gray-400 cursor-not-allowed' : 'text-[#0D5C4D] hover:bg-[#D0E0DB]'}`}
-            >
-              &lt;
-            </button>
-
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              // Simple logic to show a window of pages or just first 5 for now
-              // Improved logic: show current page window
-              let pageNum = i + 1;
-              if (totalPages > 5) {
-                if (currentPage > 3) {
-                  pageNum = currentPage - 2 + i;
-                }
-                if (pageNum > totalPages) return null;
-              }
-
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => handlePageChange(pageNum)}
-                  className={`px-4 py-2 rounded-lg font-medium ${currentPage === pageNum ? 'bg-[#0D8568] text-white' : 'text-[#6B8782] hover:bg-[#D0E0DB]'}`}
-                >
-                  {pageNum}
-                </button>
-              );
-            })}
-
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage === totalPages || totalPages === 0}
-              className={`px-3 py-2 rounded-lg transition-colors ${currentPage === totalPages || totalPages === 0 ? 'text-gray-400 cursor-not-allowed' : 'text-[#0D5C4D] hover:bg-[#D0E0DB]'}`}
-            >
-              &gt;
-            </button>
-          </div>
-        </div>
+        <PayoutPagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPayouts.length}
+          itemsPerPage={itemsPerPage}
+          onPageChange={setCurrentPage}
+          onClampPage={setCurrentPage}
+          itemLabel="payouts"
+        />
       </div>
     </div>
   );

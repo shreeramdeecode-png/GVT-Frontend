@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, Download } from 'lucide-react';
+import PayoutFilterBar, { PayAllConfirmModal } from '../common/PayoutFilterBar';
+import PayoutPagination from '../common/PayoutPagination';
 import { getAllOrders } from '../../../api/orderApi';
 import { getOrderAssignment } from '../../../api/orderAssignmentApi';
 import { getAllLabours } from '../../../api/labourApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllAttendance } from '../../../api/labourAttendanceApi';
-import { getPaidRecords, markAsPaid, unmarkAsPaid } from '../../../api/payoutApi';
+import { getPaidRecords, markAsPaid, markPartialPaid, unmarkAsPaid } from '../../../api/payoutApi';
 import {
   getPaidRecords as getDailyPaidRecords,
   markAsPaid as markDailyAsPaid,
@@ -15,9 +16,11 @@ import {
 } from '../../../api/dailyPayoutsApi';
 import * as XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
+import { usePayoutPayAll, payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
 import 'jspdf-autotable';
 
-const ITEMS_PER_PAGE = 7;
+const ITEMS_PER_PAGE = DEFAULT_PAYOUT_PAGE_SIZE;
 const DAYS_BACK = 60;
 const STORAGE_KEY_ALL = 'labour-daily-paid';
 
@@ -42,6 +45,9 @@ const LabourPayoutManagement = () => {
   const [loading, setLoading] = useState(true);
   const [payoutData, setPayoutData] = useState([]);
   const [processingKey, setProcessingKey] = useState('');
+  const [partialModal, setPartialModal] = useState({ open: false, payout: null });
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialNote, setPartialNote] = useState('');
   const [paidKeys, setPaidKeys] = useState(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_ALL);
@@ -211,6 +217,17 @@ const LabourPayoutManagement = () => {
         // ignore
       }
 
+      const paidMap = new Map();
+      try {
+        const paidList = paidRes?.data ?? paidRes?.paidRecords ?? paidRes?.records ?? (Array.isArray(paidRes) ? paidRes : []);
+        paidList.forEach((item) => {
+          const k = item?.reference_key ?? item?.key ?? (item?.date && item?.entity_id ? `${item.date}_${item.entity_id}` : null);
+          if (k) paidMap.set(k, item);
+        });
+      } catch {
+        // ignore
+      }
+
       let rows = Object.entries(rowKeyToWage).map(([key]) => {
         const labourId = rowKeyToLabourId[key] || '';
         const labourName = rowKeyToLabourName[key] || labourId;
@@ -218,7 +235,15 @@ const LabourPayoutManagement = () => {
         const workType = (labour?.work_type || 'Normal').trim();
         const workload = workType === 'Heavy' ? 'Heavy' : workType === 'Light' ? 'Light' : 'Normal';
         const dailyWage = (ratesMap[workType] ?? ratesMap['Normal'] ?? parseFloat(labour?.daily_wage)) || 0;
-        const status = paidSet.has(key) ? 'Paid' : 'Pending';
+        const paymentRecord = paidMap.get(key);
+        const paymentStatus = String(paymentRecord?.payment_status || '').toLowerCase();
+        const partialPaidAmount = parseFloat(
+          paymentRecord?.row_data?.partialPaidAmount ??
+          paymentRecord?.row_data?.partial_amount ??
+          paymentRecord?.partial_amount ??
+          0
+        ) || 0;
+        const status = paymentStatus === 'partial' ? 'Partial' : (paidSet.has(key) ? 'Paid' : 'Pending');
         const [date] = key.split('_');
         const excess = excessByDateAndLabour[key] ?? 0;
         return {
@@ -230,7 +255,8 @@ const LabourPayoutManagement = () => {
           dailyWage,
           excessPay: excess,
           totalPayout: dailyWage + excess,
-          status
+          status,
+          partialPaidAmount
         };
       });
 
@@ -361,9 +387,23 @@ const LabourPayoutManagement = () => {
     });
   }, [payoutData, searchQuery, fromDate, toDate, selectedLabourId]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredPayouts.length / ITEMS_PER_PAGE));
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const paginatedPayouts = filteredPayouts.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const {
+    payAllModalOpen,
+    payAllSelected,
+    payAllTargets,
+    openPayAllModal,
+    closePayAllModal,
+    removeFromPayAll,
+    getBalanceAmount,
+    resolveKey,
+  } = usePayoutPayAll(filteredPayouts, { totalField: 'totalPayout' });
+
+  const totalPages = calcPayoutTotalPages(filteredPayouts.length, ITEMS_PER_PAGE);
+  const paginatedPayouts = getPayoutPageSlice(filteredPayouts, currentPage, ITEMS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, fromDate, toDate, selectedLabourId]);
 
   const summaryStats = useMemo(() => {
     const totalPayouts = payoutData.length;
@@ -388,9 +428,6 @@ const LabourPayoutManagement = () => {
     { label: 'Total Active Labour', value: summaryStats.activeLabour.toString(), change: '' }
   ];
 
-  const getStatusColor = (status) =>
-    status === 'Paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700';
-
   const getWorkloadColor = (workload) => {
     if (workload === 'Light') return 'bg-blue-100 text-blue-700';
     if (workload === 'Normal') return 'bg-green-100 text-green-700';
@@ -402,8 +439,88 @@ const LabourPayoutManagement = () => {
 
   // Total pending should respect current filters (date range, labour, search)
   const totalPending = filteredPayouts
-    .filter((p) => p.status === 'Pending')
+    .filter((p) => p.status !== 'Paid')
     .reduce((sum, p) => sum + p.totalPayout, 0);
+
+  const openPartialPaymentModal = (payout) => {
+    setPartialAmount('');
+    setPartialNote('');
+    setPartialModal({ open: true, payout });
+  };
+
+  const closePartialPaymentModal = () => {
+    setPartialModal({ open: false, payout: null });
+    setPartialAmount('');
+    setPartialNote('');
+  };
+
+  const handlePartialPay = async () => {
+    if (!partialModal.payout) return;
+    const payout = partialModal.payout;
+    const entered = Number(partialAmount);
+    const alreadyPaid = Number(payout.partialPaidAmount || 0);
+    const total = Number(payout.totalPayout || 0);
+    if (!Number.isFinite(entered) || entered <= 0) return alert('Enter a valid partial amount');
+    const cumulative = alreadyPaid + entered;
+    if (total > 0 && cumulative >= total) return alert('Total partial paid must be less than total payout');
+    try {
+      setProcessingKey(payout.key);
+      await markPartialPaid('labour', {
+        key: payout.key,
+        id: payout.key,
+        entity_id: payout.labourId,
+        date: payout.date,
+        amount: total,
+        partial_amount: entered,
+        partial_paid_total: cumulative,
+        note: partialNote
+      });
+      setPayoutData((prev) =>
+        prev.map((p) =>
+          p.key === payout.key
+            ? { ...p, status: 'Partial', partialPaidAmount: cumulative }
+            : p
+        )
+      );
+      closePartialPaymentModal();
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to save partial payment');
+    } finally {
+      setProcessingKey('');
+    }
+  };
+
+  const confirmPayAll = async () => {
+    const pending = payAllSelected;
+    if (pending.length === 0) return;
+    try {
+      setProcessingKey('pay-all');
+      for (const payout of pending) {
+        const rowData = {
+          key: payout.key,
+          entity_id: payout.labourId,
+          date: payout.date,
+          labourId: payout.labourId,
+          labourName: payout.labourName,
+          workload: payout.workload,
+          dailyWage: payout.dailyWage,
+          excessPay: payout.excessPay,
+          totalPayout: payout.totalPayout,
+          amount: Number(payout.totalPayout) || 0,
+          status: 'Paid',
+          ...payout
+        };
+        await markAsPaid('labour', rowData);
+        await markDailyAsPaid('labour', rowData).catch(() => {});
+      }
+      setPayoutData((prev) => prev.map((p) => (pending.some((x) => x.key === p.key) ? { ...p, status: 'Paid', partialPaidAmount: 0 } : p)));
+      closePayAllModal(false);
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to pay all');
+    } finally {
+      setProcessingKey('');
+    }
+  };
 
   const handleExportExcel = () => {
     if (filteredPayouts.length === 0) {
@@ -551,177 +668,109 @@ const LabourPayoutManagement = () => {
         ))}
       </div>
 
-      {/* Search and Controls */}
-      <div className="bg-white rounded-xl shadow-sm border border-[#D0E0DB] p-4 mb-6">
-        <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3">
-          {/* Search */}
-          <div className="flex-1 relative">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by labour name or date..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm bg-gray-50"
-            />
-          </div>
-
-          {/* Date range filters */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="flex flex-col">
-              <label className="text-xs font-medium text-[#6B8782] mb-1">From date</label>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-gray-50"
-              />
-            </div>
-            <div className="flex flex-col">
-              <label className="text-xs font-medium text-[#6B8782] mb-1">To date</label>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-gray-50"
-              />
-            </div>
-          </div>
-
-          {/* Labour dropdown */}
-          <div className="flex flex-col min-w-[180px]">
-            <label className="text-xs font-medium text-[#6B8782] mb-1">Labour</label>
-            <div className="relative">
-              <select
-                value={selectedLabourId}
-                onChange={(e) => setSelectedLabourId(e.target.value)}
-                className="w-full appearance-none px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent pr-8"
-              >
-                <option value="">All labours</option>
-                {labourOptions.map((l) => (
-                  <option key={l.lid} value={String(l.lid)}>
-                    {l.full_name || l.name}
-                  </option>
-                ))}
-              </select>
-              <Filter className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Clear + Export */}
-          <div className="flex items-stretch sm:items-center gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setFromDate('');
-                setToDate('');
-                setSelectedLabourId('');
-              }}
-              className="px-4 py-2 border border-gray-300 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 hover:bg-gray-50 text-gray-700 text-sm"
-            >
-              Clear filters
-            </button>
-            <button
-              type="button"
-              onClick={handleExportPDF}
-              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm"
-            >
-              Export PDF
-            </button>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm text-sm"
-            >
-              <Download className="w-4 h-4" />
-              Export Excel
-            </button>
-          </div>
-        </div>
-      </div>
+      <PayoutFilterBar
+        idPrefix="labour-payout"
+        searchValue={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchPlaceholder="Labour name or date..."
+        fromDate={fromDate}
+        onFromDateChange={setFromDate}
+        toDate={toDate}
+        onToDateChange={setToDate}
+        entityFilter={{
+          label: 'Labour',
+          value: selectedLabourId,
+          onChange: setSelectedLabourId,
+          options: [
+            { value: '', label: 'All labours' },
+            ...labourOptions.map((l) => ({
+              value: String(l.lid),
+              label: l.full_name || l.name || `Labour ${l.lid}`,
+            })),
+          ],
+        }}
+        onClear={() => {
+          setFromDate('');
+          setToDate('');
+          setSelectedLabourId('');
+          setSearchQuery('');
+        }}
+        onPayAll={openPayAllModal}
+        payAllDisabled={payAllTargets.length === 0}
+        payAllLoading={processingKey === 'pay-all'}
+        onExportPDF={handleExportPDF}
+        onExportExcel={handleExportExcel}
+      />
 
       {/* Labour Daily Payouts Table - same format as Labour Daily Payout page, for all labours */}
-      <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-[#D4F4E8]">
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Date</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Labour Name</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Workload</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Daily Wage</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess Pay</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Total Payout</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Action</th>
+      <div className={payoutTableWrap}>
+        <div className={payoutTableScroll}>
+          <table className={`${payoutTableBase} min-w-[1050px]`}>
+            <colgroup>
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+            </colgroup>
+            <thead className={payoutThead}>
+              <tr>
+                <th className={`${payoutTh} text-left`}>Date</th>
+                <th className={`${payoutTh} text-left`}>Labour Name</th>
+                <th className={`${payoutTh} text-center`}>Workload</th>
+                <th className={`${payoutTh} text-right`}>Daily Wage</th>
+                <th className={`${payoutTh} text-right`}>Excess Pay</th>
+                <th className={`${payoutTh} text-right`}>Total Payout</th>
+                <th className={`${payoutTh} text-center`}>Status</th>
+                <th className={`${payoutTh} text-center`}>Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={payoutTbody}>
               {loading ? (
-                <tr>
-                  <td colSpan="8" className="px-6 py-8 text-center text-[#6B8782]">
-                    Loading labour payouts...
-                  </td>
-                </tr>
+                <tr><td colSpan={8} className={payoutEmptyCell}>Loading labour payouts...</td></tr>
               ) : paginatedPayouts.length === 0 ? (
-                <tr>
-                  <td colSpan="8" className="px-6 py-8 text-center text-[#6B8782]">
-                    No labour payouts found
-                  </td>
-                </tr>
+                <tr><td colSpan={8} className={payoutEmptyCell}>No labour payouts found</td></tr>
               ) : (
                 paginatedPayouts.map((payout, index) => (
-                  <tr
-                    key={payout.key}
-                    className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                      index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                    }`}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-[#0D5C4D] text-sm">
-                        {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
-                      </div>
+                  <tr key={payout.key} className={payoutRow(index)}>
+                    <td className={`${payoutTd} whitespace-nowrap font-semibold`}>
+                      {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-[#0D5C4D] text-sm">{payout.labourName}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-3 py-1.5 rounded-full text-xs font-medium ${getWorkloadColor(payout.workload)}`}>
+                    <td className={`${payoutTd} font-medium`}>{payout.labourName}</td>
+                    <td className={payoutTdCenter}>
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getWorkloadColor(payout.workload)}`}>
                         {payout.workload}
                       </span>
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-[#0D5C4D] text-sm">₹{formatNum(payout.dailyWage)}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-green-600 text-sm">+₹{formatNum(payout.excessPay)}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-[#0D5C4D] text-sm">₹{formatNum(payout.totalPayout)}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-3 py-1.5 rounded-full text-xs font-medium ${getStatusColor(payout.status)}`}>
-                        {payout.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      {payout.status === 'Pending' ? (
-                        <button
-                          onClick={() => payout.status === 'Pending' ? handlePay(payout) : undefined}
-                          disabled={processingKey === payout.key}
-                          className="px-4 py-2 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors disabled:opacity-50"
-                        >
-                          {processingKey === payout.key ? 'Saving...' : 'Pay'}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleRevert(payout)}
-                          disabled={processingKey === payout.key}
-                          className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 transition-colors disabled:opacity-50"
-                        >
-                          {processingKey === payout.key ? 'Saving...' : 'Revert'}
-                        </button>
+                    <td className={payoutTdNum}>₹{formatNum(payout.dailyWage)}</td>
+                    <td className={`${payoutTdNum} text-green-600`}>+₹{formatNum(payout.excessPay)}</td>
+                    <td className={`${payoutTdNum} font-bold`}>₹{formatNum(payout.totalPayout)}</td>
+                    <td className={payoutTdCenter}>
+                      <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>{payout.status}</span>
+                      {payout.status === 'Partial' && (
+                        <div className="mt-1 text-[10px] text-[#6B8782] leading-tight">
+                          Paid ₹{formatNum(payout.partialPaidAmount || 0)}<br />Bal ₹{formatNum(getBalanceAmount(payout))}
+                        </div>
                       )}
+                    </td>
+                    <td className={`${payoutTdCenter} whitespace-nowrap`}>
+                      <div className={payoutActionRow}>
+                        {payout.status === 'Paid' ? (
+                          <button type="button" onClick={() => handleRevert(payout)} disabled={processingKey === payout.key} className={payoutBtn.revert}>
+                            {processingKey === payout.key ? '…' : 'Revert'}
+                          </button>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => openPartialPaymentModal(payout)} disabled={processingKey === payout.key} className={payoutBtn.partial}>Partial</button>
+                            <button type="button" onClick={() => handlePay(payout)} disabled={processingKey === payout.key} className={payoutBtn.pay}>
+                              {processingKey === payout.key ? '…' : payout.status === 'Partial' ? `Pay Bal ₹${formatNum(getBalanceAmount(payout))}` : 'Pay'}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -730,36 +779,60 @@ const LabourPayoutManagement = () => {
           </table>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-          <div className="text-sm text-[#6B8782]">
-            Showing {filteredPayouts.length === 0 ? 0 : startIndex + 1}–{Math.min(startIndex + ITEMS_PER_PAGE, filteredPayouts.length)} of {filteredPayouts.length} payouts
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-            <span className="text-sm text-[#6B8782] px-2">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
-          <div className="text-sm font-semibold text-[#0D5C4D]">
+        <PayoutPagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPayouts.length}
+          itemsPerPage={ITEMS_PER_PAGE}
+          onPageChange={setCurrentPage}
+          onClampPage={setCurrentPage}
+          itemLabel="payouts"
+        >
+          <span className="font-semibold text-[#0D5C4D]">
             Total Pending: <span className="text-[#0D7C66]">₹{formatNum(totalPending)}</span>
+          </span>
+        </PayoutPagination>
+      </div>
+      <PayAllConfirmModal
+        open={payAllModalOpen}
+        fromDate={fromDate}
+        toDate={toDate}
+        rows={payAllSelected}
+        entityColumnLabel="Labour"
+        getEntityPrimary={(p) => p.labourName}
+        getRowDate={(p) => p.date}
+        getRowKey={resolveKey}
+        getBalanceAmount={getBalanceAmount}
+        onRemove={removeFromPayAll}
+        onClose={() => closePayAllModal(processingKey === 'pay-all')}
+        onConfirm={confirmPayAll}
+        loading={processingKey === 'pay-all'}
+      />
+      {partialModal.open && partialModal.payout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md bg-white rounded-xl shadow-xl p-5">
+            <h3 className="text-lg font-semibold text-[#0D5C4D] mb-1">Partial Payment</h3>
+            <p className="text-sm text-[#6B8782] mb-4">
+              {partialModal.payout.labourName} — Total ₹{formatNum(partialModal.payout.totalPayout)}
+            </p>
+            {Number(partialModal.payout.partialPaidAmount || 0) > 0 && (
+              <p className="text-xs text-[#0D5C4D] mb-3">
+                Paid: ₹{formatNum(partialModal.payout.partialPaidAmount || 0)} | Balance: ₹{formatNum(getBalanceAmount(partialModal.payout))}
+              </p>
+            )}
+            <div className="space-y-3">
+              <input type="number" min="0" step="0.01" value={partialAmount} onChange={(e) => setPartialAmount(e.target.value)} placeholder="Partial amount" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              <textarea value={partialNote} onChange={(e) => setPartialNote(e.target.value)} placeholder="Note (optional)" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm min-h-[84px]" />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={closePartialPaymentModal} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+              <button type="button" onClick={handlePartialPay} disabled={processingKey === partialModal.payout.key} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
+                {processingKey === partialModal.payout.key ? 'Saving...' : 'Save Partial'}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

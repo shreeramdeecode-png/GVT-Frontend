@@ -8,8 +8,11 @@ import { getAllLabourRates } from '../../../api/labourRateApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllAttendance, getAttendanceByLabourId } from '../../../api/labourAttendanceApi';
 import { getPaidRecords, markAsPaid } from '../../../api/dailyPayoutsApi';
+import PayoutPagination from '../common/PayoutPagination';
 
-const ITEMS_PER_PAGE = 7;
+import { payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
+const ITEMS_PER_PAGE = DEFAULT_PAYOUT_PAGE_SIZE;
 
 const toDateStr = (val) => {
   if (!val) return '';
@@ -304,10 +307,6 @@ const LabourDailyPayout = () => {
     }
   };
 
-  const getStatusColor = (status) => {
-    return status === 'Paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700';
-  };
-
   const getWorkloadColor = (workload) => {
     if (workload === 'Light') return 'bg-blue-100 text-blue-700';
     if (workload === 'Normal') return 'bg-green-100 text-green-700';
@@ -321,11 +320,8 @@ const LabourDailyPayout = () => {
     .filter((p) => p.status === 'Pending')
     .reduce((sum, p) => sum + p.totalPayout, 0);
 
-  const totalPages = Math.max(1, Math.ceil(payoutData.length / ITEMS_PER_PAGE));
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const paginatedData = payoutData.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  const startItem = payoutData.length === 0 ? 0 : startIndex + 1;
-  const endItem = Math.min(startIndex + ITEMS_PER_PAGE, payoutData.length);
+  const totalPages = calcPayoutTotalPages(payoutData.length, ITEMS_PER_PAGE);
+  const paginatedData = getPayoutPageSlice(payoutData, currentPage, ITEMS_PER_PAGE);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-emerald-50 p-4 sm:p-6 lg:p-8">
@@ -349,81 +345,64 @@ const LabourDailyPayout = () => {
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#D4F4E8]">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Date</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Labour Name</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Workload</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Daily Wage</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess Pay</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Total Payout</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Action</th>
+        <div className={payoutTableWrap}>
+          <div className={payoutTableScroll}>
+            <table className={`${payoutTableBase} min-w-[950px]`}>
+              <colgroup>
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '14%' }} />
+              </colgroup>
+              <thead className={payoutThead}>
+                <tr>
+                  <th className={`${payoutTh} text-left`}>Date</th>
+                  <th className={`${payoutTh} text-left`}>Labour Name</th>
+                  <th className={`${payoutTh} text-center`}>Workload</th>
+                  <th className={`${payoutTh} text-right`}>Daily Wage</th>
+                  <th className={`${payoutTh} text-right`}>Excess Pay</th>
+                  <th className={`${payoutTh} text-right`}>Total Payout</th>
+                  <th className={`${payoutTh} text-center`}>Status</th>
+                  <th className={`${payoutTh} text-center`}>Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={payoutTbody}>
                 {loading ? (
-                  <tr>
-                    <td colSpan="8" className="px-6 py-8 text-center text-[#6B8782]">
-                      Loading daily payouts...
-                    </td>
-                  </tr>
+                  <tr><td colSpan={8} className={payoutEmptyCell}>Loading daily payouts...</td></tr>
                 ) : payoutData.length === 0 ? (
-                  <tr>
-                    <td colSpan="8" className="px-6 py-8 text-center text-[#6B8782]">
-                      No payout data yet.
-                    </td>
-                  </tr>
+                  <tr><td colSpan={8} className={payoutEmptyCell}>No payout data yet.</td></tr>
                 ) : (
                   paginatedData.map((payout, index) => (
-                    <tr
-                      key={payout.key}
-                      className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                        index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                      }`}
-                    >
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-[#0D5C4D] text-sm">
-                          {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
-                        </div>
+                    <tr key={payout.key} className={payoutRow(index)}>
+                      <td className={`${payoutTd} whitespace-nowrap font-semibold`}>
+                        {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">{payout.labourName}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1.5 rounded-full text-xs font-medium ${getWorkloadColor(payout.workload)}`}>
+                      <td className={`${payoutTd} font-medium`}>{payout.labourName}</td>
+                      <td className={payoutTdCenter}>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getWorkloadColor(payout.workload)}`}>
                           {payout.workload}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">₹{formatNum(payout.dailyWage)}</div>
+                      <td className={payoutTdNum}>₹{formatNum(payout.dailyWage)}</td>
+                      <td className={`${payoutTdNum} text-green-600`}>+₹{formatNum(payout.excessPay)}</td>
+                      <td className={`${payoutTdNum} font-bold`}>₹{formatNum(payout.totalPayout)}</td>
+                      <td className={payoutTdCenter}>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>{payout.status}</span>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-green-600 text-sm">+₹{formatNum(payout.excessPay)}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-[#0D5C4D] text-sm">₹{formatNum(payout.totalPayout)}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1.5 rounded-full text-xs font-medium ${getStatusColor(payout.status)}`}>
-                          {payout.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        {payout.status === 'Pending' ? (
-                          <button
-                            onClick={() => handlePay(payout)}
-                            disabled={markingPaid}
-                            className="px-4 py-2 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors disabled:opacity-50"
-                          >
-                            {markingPaid ? 'Saving...' : 'Pay'}
-                          </button>
-                        ) : (
-                          <span className="text-xs text-gray-500 font-medium">Paid</span>
-                        )}
+                      <td className={payoutTdCenter}>
+                        <div className={payoutActionRow}>
+                          {payout.status === 'Pending' ? (
+                            <button type="button" onClick={() => handlePay(payout)} disabled={markingPaid} className={payoutBtn.pay}>
+                              {markingPaid ? '…' : 'Pay'}
+                            </button>
+                          ) : (
+                            <span className="text-xs text-[#6B8782] font-medium">Paid</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -432,35 +411,19 @@ const LabourDailyPayout = () => {
             </table>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-            <div className="text-sm text-[#6B8782]">
-              Showing {startItem}–{endItem} of {payoutData.length} days
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-[#6B8782] px-2">
-                Page {currentPage} of {totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="text-sm font-semibold text-[#0D5C4D]">
+          <PayoutPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={payoutData.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            onClampPage={setCurrentPage}
+            itemLabel="days"
+          >
+            <span className="font-semibold text-[#0D5C4D]">
               Total Pending: <span className="text-[#0D7C66]">₹{formatNum(totalPending)}</span>
-            </div>
-          </div>
+            </span>
+          </PayoutPagination>
         </div>
       </div>
     </div>

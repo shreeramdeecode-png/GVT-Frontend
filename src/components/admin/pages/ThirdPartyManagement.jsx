@@ -3,9 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, MoreVertical, Eye, Edit, Trash2, Download } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllThirdParties } from '../../../api/thirdPartyApi';
-import { getAllProducts } from '../../../api/productApi';
+import { fetchAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
-import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../api/payoutApi';
 import * as XLSX from 'xlsx-js-style';
 
 const ThirdPartyManagement = () => {
@@ -72,7 +72,7 @@ const ThirdPartyManagement = () => {
         setLoading(true);
         const [thirdPartiesResponse, productsResponse] = await Promise.all([
           getAllThirdParties(),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
 
         if (thirdPartiesResponse.success) {
@@ -80,7 +80,7 @@ const ThirdPartyManagement = () => {
         } else {
           setError(thirdPartiesResponse.message || 'Failed to fetch third parties');
         }
-        setAllProducts(productsResponse.data || []);
+        setAllProducts(Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []));
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(err.message || 'An error occurred while fetching data');

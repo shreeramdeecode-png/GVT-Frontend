@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { createAirport, getAllAirports, updateAirport, deleteAirport } from '../../../api/airportApi';
 
+const getAirportId = (airport) => airport?.aid ?? airport?.id;
+
 const Airport = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,7 +23,7 @@ const Airport = () => {
     try {
       const response = await getAllAirports();
       if (response.success) {
-        setAirports(response.data);
+        setAirports((response.data || []).map((a) => ({ ...a, id: a.aid ?? a.id })));
       }
     } catch (error) {
       console.error('Error fetching airports:', error);
@@ -64,7 +66,7 @@ const Airport = () => {
   const handleEditSubmit = async (e) => {
     e.preventDefault();
     try {
-      await updateAirport(selectedAirport.id, { ...formData, city: formData.location });
+      await updateAirport(getAirportId(selectedAirport), { ...formData, city: formData.location });
       fetchAirports();
       setIsEditModalOpen(false);
       setFormData({ name: '', code: '', location: '', status: 'Active' });

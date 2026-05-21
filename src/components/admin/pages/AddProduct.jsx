@@ -9,6 +9,7 @@ import { getPreferencesByCustomer, createPreference, updatePreference, deletePre
 import { getAllProductCounts, updateProductCountStatus } from '../../../api/productCountApi';
 import { BASE_URL } from '../../../config/config';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
+import { fetchAllProducts as fetchAllProductsForPrefs } from '../../../api/productApi';
 
 const AddProduct = () => {
   const [activeTab, setActiveTab] = useState('product');
@@ -605,8 +606,7 @@ const AddProduct = () => {
 
   const fetchAllProducts = async () => {
     try {
-      const allProductsResponse = await getAllProducts(1, 1000);
-      const allProducts = allProductsResponse.data || [];
+      const allProducts = await fetchAllProductsForPrefs();
       
       const productPrefs = allProducts.map(product => ({
         product_id: product.pid,
@@ -632,8 +632,7 @@ const AddProduct = () => {
       // If base list not yet loaded, fetch it now
       if (!baseProducts || baseProducts.length === 0) {
         try {
-          const allProductsResponse = await getAllProducts(1, 1000);
-          const allProducts = allProductsResponse.data || [];
+          const allProducts = await fetchAllProductsForPrefs();
           baseProducts = allProducts.map(product => ({
             product_id: product.pid,
             product_name: product.product_name,

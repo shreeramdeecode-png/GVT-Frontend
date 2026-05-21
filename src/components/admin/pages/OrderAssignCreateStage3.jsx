@@ -6,6 +6,7 @@ import { updateStage3Assignment } from '../../../api/orderAssignmentApi';
 import { getAllAirports } from '../../../api/airportApi';
 import InsufficientStockModal from '../../../components/common/InsufficientStockModal';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
+import { applySplitWeightsToProductRows } from './FlowerOrderAssignStage3';
 
 const OrderAssignCreateStage3 = () => {
   const navigate = useNavigate();
@@ -27,6 +28,9 @@ const OrderAssignCreateStage3 = () => {
   const [noOfPkgsWarning, setNoOfPkgsWarning] = useState({}); // { rowId: 'warning message' } when No of Pkgs > Avl Box
   const [stockModalOpen, setStockModalOpen] = useState(false);
   const [stockModalMessage, setStockModalMessage] = useState('');
+
+  const commitProductRows = (rows) =>
+    setProductRows(applySplitWeightsToProductRows(rows, orderData?.items || []));
 
   // Refs for keyboard navigation in main table (No of Pkgs, Airport, Driver)
   const inputGridRefs = useRef({});
@@ -120,6 +124,111 @@ const OrderAssignCreateStage3 = () => {
     if (!numBoxesStr) return 0;
     const match = String(numBoxesStr).match(/^(\d+(?:\.\d+)?)/);
     return match ? parseFloat(match[1]) : 0;
+  };
+
+  const normalizeRowStatus = (status) =>
+    String(status || 'pending').toLowerCase().replace(/\s+/g, '');
+
+  // Keep pending editable; lock finalized/in-transit rows only.
+  const isAssignmentLocked = (row) => {
+    const normalized = normalizeRowStatus(row?.status);
+    return normalized === 'ontrip' || normalized === 'completed';
+  };
+
+  const getUsedPackagesForProduct = (rows, oiid, excludeRowId = null) =>
+    rows
+      .filter((r) => r.oiid === oiid && r.id !== excludeRowId)
+      .reduce((sum, r) => sum + (parseInt(r.noOfPkgs, 10) || 0), 0);
+
+  /** Packed (Avl) boxes left for this product after other assignment rows. */
+  const getRemainingAvailableBoxes = (row, rows, excludeRowId = null) => {
+    const avl = parseInt(row?.availableBoxes, 10) || 0;
+    const used = getUsedPackagesForProduct(rows, row.oiid, excludeRowId);
+    return Math.max(0, avl - used);
+  };
+
+  const parseCtRange = (ct) => {
+    if (!ct || !String(ct).includes('-')) return null;
+    const parts = String(ct).split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parseInt(parts[1], 10);
+    if (Number.isNaN(start) || Number.isNaN(end)) return null;
+    return { start, end };
+  };
+
+  const getOccupiedCtRanges = (rows, oiid, airportName, currentRowId) => {
+    const ranges = [];
+    rows
+      .filter(
+        (row) =>
+          row.oiid === oiid &&
+          row.id !== currentRowId &&
+          row.ct &&
+          (!airportName || row.airportName === airportName)
+      )
+      .forEach((row) => {
+        const parsed = parseCtRange(row.ct);
+        if (parsed) ranges.push(parsed);
+      });
+    return ranges.sort((a, b) => a.start - b.start);
+  };
+
+  const rangeOverlaps = (start, end, ranges) =>
+    ranges.some(
+      (r) =>
+        (start >= r.start && start <= r.end) ||
+        (end >= r.start && end <= r.end) ||
+        (start <= r.start && end >= r.end)
+    );
+
+  /** CT slots only within packed boxes (1 … availableBoxes), not pending. */
+  const getNextCTStartInPackedRange = (row, rows, airportName, numPkgs, currentRowId) => {
+    const maxPacked = parseInt(row?.availableBoxes, 10) || 0;
+    if (maxPacked <= 0 || numPkgs <= 0) return null;
+    const occupied = getOccupiedCtRanges(rows, row.oiid, airportName, currentRowId);
+    for (let start = 1; start + numPkgs - 1 <= maxPacked; start += 1) {
+      const end = start + numPkgs - 1;
+      if (!rangeOverlaps(start, end, occupied)) return start;
+    }
+    return null;
+  };
+
+  const validatePackagesForRow = (row, rows, numPkgs, excludeRowId = null) => {
+    const remainingAvl = getRemainingAvailableBoxes(row, rows, excludeRowId);
+    const totalBoxes = parseInt(row.totalBoxes, 10) || 0;
+    const otherPkgs = getUsedPackagesForProduct(rows, row.oiid, excludeRowId);
+    if (numPkgs > remainingAvl) {
+      const avl = parseInt(row.availableBoxes, 10) || 0;
+      const pending = parseInt(row.pendingBoxes, 10) || 0;
+      if (remainingAvl <= 0) {
+        return {
+          ok: false,
+          message:
+            pending > 0
+              ? `All ${avl} packed box(es) are already assigned. Pending (${pending}) boxes cannot be used until packed in Stage 2.`
+              : 'No packed boxes available. Complete Stage 2 packing first.',
+        };
+      }
+      return {
+        ok: false,
+        message: `Only ${remainingAvl} packed box(es) left (${avl} avl, ${otherPkgs} already on other routes). Pending boxes cannot be used.`,
+      };
+    }
+    if (totalBoxes > 0 && otherPkgs + numPkgs > totalBoxes) {
+      return {
+        ok: false,
+        message: `Total packages (${otherPkgs + numPkgs}) cannot exceed ${totalBoxes} boxes/bags.`,
+      };
+    }
+    return { ok: true };
+  };
+
+  const getAssignmentRowClass = (row, index) => {
+    const status = normalizeRowStatus(row.status);
+    if (noOfPkgsWarning[row.id]) return 'bg-red-50 border-l-4 border-red-400';
+    if (status === 'completed') return 'bg-emerald-50 border-l-4 border-emerald-500';
+    if (status === 'ontrip') return 'bg-sky-50 border-l-4 border-sky-500';
+    return index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50';
   };
 
   // Load available drivers and product data
@@ -274,21 +383,18 @@ const OrderAssignCreateStage3 = () => {
                     }
                   }
 
-                  // Build box status map based on packedBoxes and status
-                  // Build box status map based on packedBoxes.
-                  // We only care about how many boxes are already packed
-                  // (completed). Pending count will be derived later as:
-                  // totalBoxes - availableBoxes.
-                  if (productId) {
-                    const packedBoxes = parseInt(assignment.packedBoxes) || 0;
-                    const status = (assignment.status || '').toLowerCase();
+                  // Avl box = packed boxes saved in Stage 2 (any labour status).
+                  // Pen box = order totalBoxes - avl (not yet packed for delivery).
+                  if (productId != null && productId !== '') {
+                    const packedBoxes = parseInt(assignment.packedBoxes, 10) || 0;
+                    const mapKey = String(productId);
 
-                    if (!stage2BoxStatusMap[productId]) {
-                      stage2BoxStatusMap[productId] = { available: 0 };
+                    if (!stage2BoxStatusMap[mapKey]) {
+                      stage2BoxStatusMap[mapKey] = { available: 0 };
                     }
 
-                    if (status === 'completed') {
-                      stage2BoxStatusMap[productId].available += packedBoxes;
+                    if (packedBoxes > 0) {
+                      stage2BoxStatusMap[mapKey].available += packedBoxes;
                     }
                   }
                 });
@@ -441,7 +547,7 @@ const OrderAssignCreateStage3 = () => {
             rows = stage3Products.map((s3Product) => {
               const orderItem = orderItemsByOiid[s3Product.oiid] || {};
               const totalBoxes = s3Product.totalBoxes || parseNumBoxes(orderItem.num_boxes);
-              const boxStatus = stage2BoxStatusMap[s3Product.oiid] || { available: 0 };
+              const boxStatus = stage2BoxStatusMap[String(s3Product.oiid)] || { available: 0 };
               const availableBoxes = boxStatus.available || 0;
               const pendingBoxes = Math.max(totalBoxes - availableBoxes, 0);
               const productCount = productCountMap[s3Product.oiid] ?? '';
@@ -484,7 +590,7 @@ const OrderAssignCreateStage3 = () => {
               } else {
                 grossWeightNum = netWeight + totalBoxes * 0.5;
               }
-              const boxStatus = stage2BoxStatusMap[item.oiid] || { available: 0 };
+              const boxStatus = stage2BoxStatusMap[String(item.oiid)] || { available: 0 };
               const availableBoxes = boxStatus.available || 0;
               const pendingBoxes = Math.max(totalBoxes - availableBoxes, 0);
               const productCount = productCountMap[item.oiid] ?? '';
@@ -515,7 +621,7 @@ const OrderAssignCreateStage3 = () => {
             });
           }
           //console.log('Final product rows:', rows);
-          setProductRows(rows);
+          commitProductRows(rows);
           setStage2BoxStatus(stage2BoxStatusMap);
         }
       } catch (error) {
@@ -526,44 +632,18 @@ const OrderAssignCreateStage3 = () => {
     loadData();
   }, [orderData, id]);
 
-  // Helper function to get next available CT position for an airport
-  const getNextCTPositionForAirport = (airportName, currentRowId, numPkgs, currentRows) => {
-    if (!airportName) return 1;
-
-    // Get all rows assigned to this airport (excluding current row)
-    const airportRows = currentRows.filter(row =>
-      row.airportName === airportName &&
-      row.id !== currentRowId &&
-      row.ct
+  // Next CT start within packed boxes only (excludes pending pen boxes)
+  const getNextCTPositionForAirport = (airportName, oiid, currentRowId, numPkgs, currentRows) => {
+    const productRow = currentRows.find((r) => r.oiid === oiid);
+    if (!productRow) return 1;
+    const start = getNextCTStartInPackedRange(
+      productRow,
+      currentRows,
+      airportName,
+      numPkgs,
+      currentRowId
     );
-
-    if (airportRows.length === 0) return 1;
-
-    // Extract all occupied ranges
-    const occupiedRanges = [];
-    airportRows.forEach(row => {
-      if (row.ct && row.ct.includes('-')) {
-        const parts = row.ct.split('-');
-        if (parts.length === 2) {
-          const start = parseInt(parts[0]);
-          const end = parseInt(parts[1]);
-          if (!isNaN(start) && !isNaN(end)) {
-            occupiedRanges.push({ start, end });
-          }
-        }
-      }
-    });
-
-    // Sort by start position
-    occupiedRanges.sort((a, b) => a.start - b.start);
-
-    // Find the highest end position and start after it
-    if (occupiedRanges.length > 0) {
-      const lastRange = occupiedRanges[occupiedRanges.length - 1];
-      return lastRange.end + 1;
-    }
-
-    return 1;
+    return start ?? 1;
   };
 
   // Validate CT range
@@ -591,6 +671,15 @@ const OrderAssignCreateStage3 = () => {
       return { valid: false, error: `End cannot exceed ${totalBoxes}` };
     }
 
+    const productRow = productRows.find((r) => r.oiid === oiid);
+    const packedLimit = parseInt(productRow?.availableBoxes, 10) || 0;
+    if (packedLimit > 0 && end > packedLimit) {
+      return {
+        valid: false,
+        error: `Only packed boxes 1–${packedLimit} can be used. Boxes ${packedLimit + 1}–${totalBoxes} are pending.`,
+      };
+    }
+
     // Check for overlaps with other CT ranges for the same product
     const sameProductRows = productRows.filter(row => row.oiid === oiid && row.id !== currentRowId);
     for (const row of sameProductRows) {
@@ -616,19 +705,15 @@ const OrderAssignCreateStage3 = () => {
 
   const handleNoOfPkgsChange = (index, value) => {
     const updatedRows = [...productRows];
+    if (isAssignmentLocked(updatedRows[index])) return;
     updatedRows[index].noOfPkgs = value;
     const currentRow = updatedRows[index];
-    const avlBox = currentRow.availableBoxes ?? 0;
 
-    // Warn if value exceeds available boxes, or when there are no avl boxes (only pen box)
-    if (value && !isNaN(parseInt(value))) {
-      const numPkgs = parseInt(value);
-      const overAvl = numPkgs > 0 && numPkgs > avlBox; // includes avlBox === 0 (only pending)
-      if (overAvl) {
-        const msg = avlBox === 0
-          ? 'Not available for packing. Avl box: 0 (only pending boxes).'
-          : `${numPkgs} is not available for packing. Avl box: ${avlBox}`;
-        setNoOfPkgsWarning((prev) => ({ ...prev, [currentRow.id]: msg }));
+    if (value && !isNaN(parseInt(value, 10))) {
+      const numPkgs = parseInt(value, 10);
+      const pkgCheck = validatePackagesForRow(currentRow, updatedRows, numPkgs, currentRow.id);
+      if (!pkgCheck.ok) {
+        setNoOfPkgsWarning((prev) => ({ ...prev, [currentRow.id]: pkgCheck.message }));
       } else {
         setNoOfPkgsWarning((prev) => {
           const next = { ...prev };
@@ -644,26 +729,32 @@ const OrderAssignCreateStage3 = () => {
       });
     }
 
-    // Auto-generate CT from No of Pkgs
-    if (value && !isNaN(parseInt(value))) {
-      const numPkgs = parseInt(value);
+    // Auto-generate CT from No of Pkgs (packed / avl boxes only)
+    if (value && !isNaN(parseInt(value, 10))) {
+      const numPkgs = parseInt(value, 10);
       if (numPkgs > 0) {
-        // Get next available position for this airport (continuous across all products)
-        const startPosition = getNextCTPositionForAirport(
-          currentRow.airportName,
-          currentRow.id,
-          numPkgs,
-          updatedRows
-        );
-
-        const endPosition = startPosition + numPkgs - 1;
-
-        // Check if it exceeds total boxes for THIS product
-        if (endPosition - startPosition + 1 <= currentRow.totalBoxes) {
-          updatedRows[index].ct = `${startPosition}-${endPosition}`;
-        } else {
+        const pkgCheck = validatePackagesForRow(currentRow, updatedRows, numPkgs, currentRow.id);
+        if (!pkgCheck.ok) {
           updatedRows[index].ct = '';
-          alert(`Cannot fit ${numPkgs} packages. Maximum available for this product: ${currentRow.totalBoxes}`);
+        } else {
+          const startPosition = getNextCTStartInPackedRange(
+            currentRow,
+            updatedRows,
+            currentRow.airportName,
+            numPkgs,
+            currentRow.id
+          );
+          if (startPosition == null) {
+            updatedRows[index].ct = '';
+            const avl = parseInt(currentRow.availableBoxes, 10) || 0;
+            setNoOfPkgsWarning((prev) => ({
+              ...prev,
+              [currentRow.id]: `No free packed box range for ${numPkgs} pkg(s). Only boxes 1–${avl} are available.`,
+            }));
+          } else {
+            const endPosition = startPosition + numPkgs - 1;
+            updatedRows[index].ct = `${startPosition}-${endPosition}`;
+          }
         }
       } else {
         updatedRows[index].ct = '';
@@ -672,15 +763,12 @@ const OrderAssignCreateStage3 = () => {
       updatedRows[index].ct = '';
     }
 
-    // Auto-add / cleanup assignment rows while typing, based on
-    // how many boxes are actually packed for this product.
-    const totalBoxes = currentRow.totalBoxes || 0;
+    const packableLimit = parseInt(currentRow.availableBoxes, 10) || 0;
 
-    if (totalBoxes > 0) {
-      // Work only with rows for this product
-      let sameProductRows = updatedRows.filter(r => r.oiid === currentRow.oiid);
+    if (packableLimit > 0 || (currentRow.totalBoxes || 0) > 0) {
+      let sameProductRows = updatedRows.filter((r) => r.oiid === currentRow.oiid);
       const totalPackages = sameProductRows.reduce(
-        (sum, r) => sum + (parseInt(r.noOfPkgs) || 0),
+        (sum, r) => sum + (parseInt(r.noOfPkgs, 10) || 0),
         0
       );
 
@@ -698,9 +786,8 @@ const OrderAssignCreateStage3 = () => {
 
       const emptyRows = sameProductRows.filter(isCompletelyEmptyRow);
 
-      if (totalPackages >= totalBoxes || totalPackages === 0) {
-        // Product fully packed (or nothing entered): remove ALL trailing
-        // empty auto-created rows for this product.
+      if (totalPackages >= packableLimit || totalPackages === 0) {
+        // All packed (avl) boxes assigned on routes, or nothing entered
         const removedIds = [];
         for (const r of emptyRows) {
           const globalIndex = updatedRows.indexOf(r);
@@ -759,48 +846,46 @@ const OrderAssignCreateStage3 = () => {
       }
     }
 
-    setProductRows(updatedRows);
+    commitProductRows(updatedRows);
   };
+
+  const getTotalPackagesForProduct = (oiid, excludeRowId = null) =>
+    productRows
+      .filter((r) => r.oiid === oiid && r.id !== excludeRowId)
+      .reduce((sum, r) => sum + (parseInt(r.noOfPkgs, 10) || 0), 0);
 
   const handleNoOfPkgsBlur = (index) => {
     const row = productRows[index];
+    if (isAssignmentLocked(row)) return;
     const value = row.noOfPkgs;
-    const totalBoxes = row.totalBoxes || 0;
-    const avlBox = row.availableBoxes ?? 0;
 
-    // Validate when user leaves the field
-    if (value && !isNaN(parseInt(value))) {
-      const numPkgs = parseInt(value);
-      if (numPkgs > totalBoxes) {
-        alert(`Number of packages (${numPkgs}) cannot exceed total boxes (${totalBoxes})`);
+    if (value && !isNaN(parseInt(value, 10))) {
+      const numPkgs = parseInt(value, 10);
+      const pkgCheck = validatePackagesForRow(row, productRows, numPkgs, row.id);
+      if (!pkgCheck.ok) {
+        alert(pkgCheck.message);
         const updatedRows = [...productRows];
         updatedRows[index].noOfPkgs = '';
         updatedRows[index].ct = '';
-        setProductRows(updatedRows);
+        commitProductRows(updatedRows);
         setNoOfPkgsWarning((prev) => {
           const next = { ...prev };
           delete next[row.id];
           return next;
         });
-        return;
-      }
-      if (numPkgs > 0 && numPkgs > avlBox) {
-        const msg = avlBox === 0
-          ? `${numPkgs} packages is not available for packing. No boxes available (Avl box: 0, only pending boxes).`
-          : `${numPkgs} packages is not available for packing. Available boxes for this product: ${avlBox}`;
-        alert(msg);
       }
     }
   };
 
   const handleDriverChange = (index, driverId) => {
+    if (isAssignmentLocked(productRows[index])) return;
     if (!driverId) {
       const updatedRows = [...productRows];
       updatedRows[index].selectedDriver = '';
       updatedRows[index].vehicleNumber = '';
       updatedRows[index].phoneNumber = '';
       updatedRows[index].vehicleCapacity = '';
-      setProductRows(updatedRows);
+      commitProductRows(updatedRows);
       return;
     }
 
@@ -839,11 +924,12 @@ const OrderAssignCreateStage3 = () => {
       updatedRows[index].vehicleCapacity = '';
     }
 
-    setProductRows(updatedRows);
+    commitProductRows(updatedRows);
   };
 
   const handleAirportNameChange = (index, airportName) => {
     const currentRow = productRows[index];
+    if (isAssignmentLocked(currentRow)) return;
     const currentDriverId = currentRow.selectedDriver;
 
     // One driver per airport: if this row has a driver, they must stay on one airport
@@ -869,22 +955,20 @@ const OrderAssignCreateStage3 = () => {
       updatedRows[index].airportLocation = '';
     }
 
-    // Recalculate CT if packages are already assigned
     if (updatedRows[index].noOfPkgs) {
-      const numPkgs = parseInt(updatedRows[index].noOfPkgs);
+      const numPkgs = parseInt(updatedRows[index].noOfPkgs, 10);
       if (numPkgs > 0) {
         const row = updatedRows[index];
-
-        const startPosition = getNextCTPositionForAirport(
+        const pkgCheck = validatePackagesForRow(row, updatedRows, numPkgs, row.id);
+        const startPosition = getNextCTStartInPackedRange(
+          row,
+          updatedRows,
           airportName,
-          row.id,
           numPkgs,
-          updatedRows
+          row.id
         );
-
-        const endPosition = startPosition + numPkgs - 1;
-
-        if (endPosition - startPosition + 1 <= row.totalBoxes) {
+        if (pkgCheck.ok && startPosition != null) {
+          const endPosition = startPosition + numPkgs - 1;
           updatedRows[index].ct = `${startPosition}-${endPosition}`;
         } else {
           updatedRows[index].ct = '';
@@ -892,17 +976,25 @@ const OrderAssignCreateStage3 = () => {
       }
     }
 
-    setProductRows(updatedRows);
+    commitProductRows(updatedRows);
   };
 
   const handleAddCTAssignment = (oiid) => {
     const sameProductRows = productRows.filter(row => row.oiid === oiid);
     const firstRow = sameProductRows[0];
+    if (isAssignmentLocked(firstRow)) return;
 
-    // Check if total packages already equals total boxes/bags
-    const totalPackages = sameProductRows.reduce((sum, row) => sum + (parseInt(row.noOfPkgs) || 0), 0);
+    const totalPackages = sameProductRows.reduce((sum, row) => sum + (parseInt(row.noOfPkgs, 10) || 0), 0);
+    const packableLimit = parseInt(firstRow.availableBoxes, 10) || 0;
+    const remainingAvl = getRemainingAvailableBoxes(firstRow, productRows);
+    if (remainingAvl <= 0) {
+      alert(
+        `Cannot add another route. All ${packableLimit} packed (Avl) box(es) are already assigned. Pending (Pen) boxes cannot be used until packed in Stage 2.`
+      );
+      return;
+    }
     if (totalPackages >= firstRow.totalBoxes) {
-      alert(`Cannot add more assignments. Total packages (${totalPackages}) already equals or exceeds total boxes/bags (${firstRow.totalBoxes}). Product is fully packed.`);
+      alert(`Cannot add more assignments. Total packages (${totalPackages}) already equals total boxes/bags (${firstRow.totalBoxes}).`);
       return;
     }
 
@@ -933,19 +1025,21 @@ const OrderAssignCreateStage3 = () => {
     const lastRowIndex = productRows.lastIndexOf(sameProductRows[sameProductRows.length - 1]);
     const updatedRows = [...productRows];
     updatedRows.splice(lastRowIndex + 1, 0, newRow);
-    setProductRows(updatedRows);
+    commitProductRows(updatedRows);
   };
 
   const handleRemoveCTAssignment = (rowId, oiid) => {
     // Prevent removing the last assignment for a product
     const sameProductRows = productRows.filter(row => row.oiid === oiid);
+    const rowToRemove = sameProductRows.find((r) => r.id === rowId);
+    if (isAssignmentLocked(rowToRemove)) return;
     if (sameProductRows.length <= 1) {
       alert('Cannot remove the last assignment for a product');
       return;
     }
 
     const updatedRows = productRows.filter(row => row.id !== rowId);
-    setProductRows(updatedRows);
+    commitProductRows(updatedRows);
   };
 
   // Calculate counts
@@ -955,6 +1049,32 @@ const OrderAssignCreateStage3 = () => {
 
   const handleConfirmAssignment = async () => {
     try {
+      const packagesByProduct = {};
+      for (const row of productRows) {
+        const oiid = row.oiid;
+        if (!packagesByProduct[oiid]) {
+          packagesByProduct[oiid] = {
+            total: 0,
+            limit: row.totalBoxes || 0,
+            avlLimit: parseInt(row.availableBoxes, 10) || 0,
+            product: row.product,
+          };
+        }
+        packagesByProduct[oiid].total += parseInt(row.noOfPkgs, 10) || 0;
+      }
+      for (const entry of Object.values(packagesByProduct)) {
+        if (entry.limit > 0 && entry.total > entry.limit) {
+          alert(`${entry.product}: total packages (${entry.total}) cannot exceed total boxes/bags (${entry.limit})`);
+          return;
+        }
+        if (entry.avlLimit > 0 && entry.total > entry.avlLimit) {
+          alert(
+            `${entry.product}: total packages (${entry.total}) cannot exceed packed (Avl) boxes (${entry.avlLimit}). Pending boxes cannot be assigned.`
+          );
+          return;
+        }
+      }
+
       // Group products by driver for summary
       const groupedByDriver = {};
       productRows.forEach(row => {
@@ -1216,7 +1336,10 @@ const OrderAssignCreateStage3 = () => {
                 const isLastOfGroup = index === productRows.lastIndexOf(sameProductRows[sameProductRows.length - 1]);
 
                 return (
-                  <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${!isLastOfGroup ? 'border-b-0' : ''}`}>
+                  <tr
+                    key={row.id}
+                    className={`hover:bg-gray-50/80 transition-colors ${getAssignmentRowClass(row, index)} ${!isLastOfGroup ? 'border-b-0' : ''}`}
+                  >
                     {isFirstOfGroup && (
                       <td className="px-4 py-4 border-r-2 border-emerald-200 bg-emerald-50" rowSpan={sameProductRows.length}>
                         <span className="text-sm font-medium text-gray-900">{row.product}</span>
@@ -1264,6 +1387,7 @@ const OrderAssignCreateStage3 = () => {
                           }}
                           type="text"
                           value={row.noOfPkgs}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleNoOfPkgsChange(index, e.target.value)}
                           onBlur={() => handleNoOfPkgsBlur(index)}
                           onKeyDown={(e) => handleKeyDown(e, index, 0, productRows.length)}
@@ -1289,6 +1413,7 @@ const OrderAssignCreateStage3 = () => {
                             if (el) inputGridRefs.current[`${index}-1`] = el;
                           }}
                           value={row.airportName}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleAirportNameChange(index, e.target.value)}
                           onKeyDown={(e) => handleKeyDown(e, index, 1, productRows.length)}
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
@@ -1313,6 +1438,7 @@ const OrderAssignCreateStage3 = () => {
                             if (el) inputGridRefs.current[`${index}-2`] = el;
                           }}
                           value={row.selectedDriver}
+                          disabled={isAssignmentLocked(row)}
                           onChange={(e) => handleDriverChange(index, e.target.value)}
                           onKeyDown={(e) => handleKeyDown(e, index, 2, productRows.length)}
                           className="min-w-[220px] w-64 appearance-none px-3 py-2 pr-8 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
@@ -1342,6 +1468,7 @@ const OrderAssignCreateStage3 = () => {
                         {isLastOfGroup && (
                           <button
                             onClick={() => handleAddCTAssignment(row.oiid)}
+                            disabled={isAssignmentLocked(row)}
                             className="flex items-center justify-center w-8 h-8 bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition-all hover:scale-105 shadow-md"
                             title="Add CT Range"
                           >
@@ -1351,6 +1478,7 @@ const OrderAssignCreateStage3 = () => {
                         {sameProductRows.length > 1 && (
                           <button
                             onClick={() => handleRemoveCTAssignment(row.id, row.oiid)}
+                            disabled={isAssignmentLocked(row)}
                             className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-500 text-white rounded-md text-xs font-medium hover:bg-red-600 transition-all hover:scale-105 shadow-md"
                             title="Remove this CT range"
                           >
@@ -1496,7 +1624,7 @@ const OrderAssignCreateStage3 = () => {
                                     const rowIndex = productRows.findIndex(r => r.id === product.id);
                                     if (rowIndex !== -1) {
                                       updatedRows[rowIndex].status = e.target.value;
-                                      setProductRows(updatedRows);
+                                      commitProductRows(updatedRows);
                                     }
                                   }}
                                 >
@@ -1722,7 +1850,7 @@ const OrderAssignCreateStage3 = () => {
                                   const rowIndex = productRows.findIndex(r => r.id === product.id);
                                   if (rowIndex !== -1) {
                                     updatedRows[rowIndex].status = e.target.value;
-                                    setProductRows(updatedRows);
+                                    commitProductRows(updatedRows);
                                   }
                                 }}
                               >

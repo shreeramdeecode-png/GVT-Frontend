@@ -10,9 +10,289 @@ import { getAllInventory } from '../../../api/inventoryApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import { getAllDriverRates } from '../../../api/driverRateApi';
 import { getAllFuelExpenses } from '../../../api/fuelExpenseApi';
+import { getAllExcessKMs } from '../../../api/excessKmApi';
+import {
+    getDriverPayoutExcessForReport,
+    formatLocalOrderReportLabel,
+    resolveDriverDid,
+} from '../../../api/driverApi';
+import {
+    buildStage3WeightSplitMap,
+    getSplitWeightForRow,
+    assignDriverNetFromSplitProducts,
+} from './FlowerOrderAssignStage3';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import * as XLSX from 'xlsx-js-style';
+
+const getDriverNetWeight = (data, boxCounts = {}) => {
+    if (parseFloat(data?.stage4NetKg || 0) > 0) {
+        return parseFloat(data.stage4NetKg) || 0;
+    }
+
+    const products = Array.isArray(data?.products) ? data.products : [];
+
+    // Prefer explicit per-product net values when present.
+    const explicitNet = products.reduce((sum, p) => {
+        const val = parseFloat(p?.netWeight ?? p?.net_weight ?? p?.quantity ?? 0) || 0;
+        return sum + val;
+    }, 0);
+    if (explicitNet > 0) return explicitNet;
+
+    const grossWeight = parseFloat(data?.totalWeight || 0) || 0;
+    if (grossWeight <= 0) return 0;
+
+    const count10kg = boxCounts.count10kg || 0;
+    const count5kg = boxCounts.count5kg || 0;
+    const countThermo = boxCounts.countThermo || 0;
+    const countNetBag = boxCounts.countNetBag || 0;
+
+    // Legacy tare model with a small estimate for net bags.
+    const tareWeight = (count10kg * 1.5) + (count5kg * 1.0) + (countThermo * 0.5) + (countNetBag * 0.1);
+    const computedNet = grossWeight - tareWeight;
+
+    // Guard against invalid/negative outputs from rough tare estimates.
+    return computedNet > 0 ? computedNet : grossWeight;
+};
+
+const normalizeProductName = (name) =>
+    String(name || '')
+        .toLowerCase()
+        .replace(/\([^)]*\)/g, '')
+        .replace(/[^a-z0-9\u0B80-\u0BFF]/g, '');
+
+const buildStage4Maps = (stage4Rows = []) => {
+    const netByProduct = {};
+    const priceByProduct = {};
+
+    stage4Rows.forEach((row) => {
+        const key = normalizeProductName(row.product_name || row.product || row.productName);
+        if (!key) return;
+
+        const net = parseFloat(row.net_weight || row.quantity || row.assignedQty || row.assigned_qty || 0) || 0;
+        const price = parseFloat(row.price || row.final_price || 0) || 0;
+
+        netByProduct[key] = (netByProduct[key] || 0) + net;
+        if (!priceByProduct[key] || price > 0) {
+            priceByProduct[key] = price;
+        }
+    });
+
+    return { netByProduct, priceByProduct };
+};
+
+/** Per-driver net kg = sum of split route weights (not full order net on each card). */
+const assignStage4NetToDrivers = (productsByDriver) => {
+    assignDriverNetFromSplitProducts(productsByDriver);
+};
+
+
+// --- Order report helpers (from utils) ---
+/** Stage 2 labour wages for Stage 3 packaging expense rows on order report. */
+
+export function buildStage2LabourWageMap(assignment) {
+  const map = {};
+  if (!assignment?.stage2_summary_data) return map;
+  try {
+    const s2Summary =
+      typeof assignment.stage2_summary_data === 'string'
+        ? JSON.parse(assignment.stage2_summary_data)
+        : assignment.stage2_summary_data;
+    (s2Summary.labourPrices || []).forEach((lp) => {
+      const labourName = lp.labourName || lp.labour;
+      if (!labourName) return;
+      map[labourName] = parseFloat(lp.totalAmount ?? lp.labourWage ?? 0) || 0;
+    });
+  } catch {
+    /* ignore parse errors */
+  }
+  return map;
+}
+
+export function getDefaultLabourRate(labourRates) {
+  const r = (labourRates || []).find(
+    (x) => x.labourType?.toLowerCase() === 'normal' && x.status === 'Active'
+  );
+  return r ? parseFloat(r.amount) : 0;
+}
+
+export function computeLabourExpenseForProducts(products, stage2LabourWageMap, labourRates) {
+  const defaultLabourRate = getDefaultLabourRate(labourRates);
+  const uniqueLabours = [
+    ...new Set(
+      (products || [])
+        .map((p) => p.labour)
+        .filter((l) => l && l !== '-' && l !== '')
+        .flatMap((l) => String(l).split(',').map((n) => n.trim()))
+    ),
+  ];
+  let labourCost = 0;
+  const rows = uniqueLabours.map((name) => {
+    const w = stage2LabourWageMap[name];
+    const amount = typeof w === 'number' && !isNaN(w) ? w : defaultLabourRate;
+    labourCost += amount;
+    return { name, amount };
+  });
+  return { rows, labourCost };
+}
+
+/** Stage 4 report: show kg bought from farmer/supplier (picked), not order selling net. */
+
+const parseKg = (value) => {
+  if (value == null || value === '') return 0;
+  const n = parseFloat(String(value).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+const parseNumBoxes = (numBoxesStr) => {
+  if (numBoxesStr == null) return 0;
+  const match = String(numBoxesStr).match(/^(\d+(?:\.\d+)?)/);
+  return match ? parseFloat(match[1]) : parseInt(numBoxesStr, 10) || 0;
+};
+
+export const isBoxBasedOrder = (order, assignment) => {
+  const type = String(assignment?.collection_type || order?.collection_type || '').toLowerCase();
+  if (type === 'box') return true;
+  const items = order?.items || [];
+  return items.some((i) => parseNumBoxes(i.num_boxes) > 0);
+};
+
+const rowIdKey = (row) => row?.id ?? row?.oiid;
+
+/** Picked kg from Stage 4 row + remaining vendor rows (same idea as OrderAssignCreateStage4). */
+export function getStage4BoughtWeightKg(row, remainingRowAssignments = {}, options = {}) {
+  const rowId = rowIdKey(row);
+  let pickedQty = parseFloat(row?.assignedQty) || 0;
+  let pickedBoxes = parseInt(row?.assignedBoxes, 10) || 0;
+
+  Object.entries(remainingRowAssignments || {}).forEach(([key, data]) => {
+    if (rowId == null || !String(key).startsWith(`${rowId}-remaining`)) return;
+    pickedQty += parseFloat(data?.assignedQty) || 0;
+    pickedBoxes += parseInt(data?.assignedBoxes, 10) || 0;
+  });
+
+  if (pickedQty > 0) return pickedQty;
+
+  const { isBoxBasedOrder: boxOrder = false } = options;
+  if (boxOrder) {
+    const neededBoxes = parseInt(row?.num_boxes, 10) || 0;
+    const neededWeight = parseFloat(row?.net_weight) || 0;
+    if (pickedBoxes > 0 && neededBoxes > 0 && neededWeight > 0) {
+      return (pickedBoxes / neededBoxes) * neededWeight;
+    }
+  }
+
+  return 0;
+};
+
+export function parseStage1Assignments(assignment) {
+  const stage1Source = assignment?.product_assignments || assignment?.stage1_data;
+  if (!stage1Source) return [];
+  try {
+    const stage1Data = typeof stage1Source === 'string' ? JSON.parse(stage1Source) : stage1Source;
+    return (
+      stage1Data.productAssignments ||
+      stage1Data.assignments ||
+      (Array.isArray(stage1Data) ? stage1Data : [])
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Sum picked qty for one order line from Stage 1 assignments (all vendors). */
+export function sumStage1PickedKgForOiid(oiid, assignments = [], orderItem = null) {
+  const idStr = String(oiid);
+  let qtySum = 0;
+  let boxSum = 0;
+
+  (assignments || []).forEach((a) => {
+    const aid = String(a.id ?? a.oiid ?? '');
+    const baseId = aid.split('-remaining')[0];
+    if (baseId !== idStr && aid !== idStr) return;
+    qtySum += parseFloat(a.assignedQty ?? a.assigned_qty ?? 0) || 0;
+    boxSum += parseInt(a.assignedBoxes ?? a.assigned_boxes ?? 0, 10) || 0;
+  });
+
+  if (qtySum > 0) return qtySum;
+
+  if (orderItem && boxSum > 0) {
+    const totalBoxes = parseNumBoxes(orderItem.num_boxes);
+    const orderNet = parseKg(orderItem.net_weight);
+    if (totalBoxes > 0 && orderNet > 0) {
+      return (boxSum / totalBoxes) * orderNet;
+    }
+  }
+
+  return 0;
+}
+
+export function parseStage2PickedByOiid(assignment) {
+  const map = {};
+  if (!assignment?.stage2_data) return map;
+  try {
+    const s2 =
+      typeof assignment.stage2_data === 'string'
+        ? JSON.parse(assignment.stage2_data)
+        : assignment.stage2_data;
+    const list =
+      s2.productAssignments || s2.stage2Assignments || s2.assignments || [];
+    list.forEach((item) => {
+      const oiid = item.oiid ?? item.id;
+      if (oiid == null) return;
+      const picked =
+        parseFloat(item.pickedQuantity ?? item.picked_quantity ?? item.pickedWeight ?? 0) || 0;
+      map[String(oiid)] = (map[String(oiid)] || 0) + picked;
+    });
+  } catch {
+    /* ignore */
+  }
+  return map;
+}
+
+/**
+ * Rows for order report Stage 4 table (bought kg + selling price).
+ */
+export function buildStage4ReportRows(stage4Data, assignment, order) {
+  const productRows = stage4Data?.reviewData?.productRows || stage4Data?.productRows || [];
+  const remaining = stage4Data?.reviewData?.remainingRowAssignments || {};
+  const boxOrder = isBoxBasedOrder(order, assignment);
+  const stage1Assignments = parseStage1Assignments(assignment);
+  const stage2Picked = parseStage2PickedByOiid(assignment);
+  const orderItemsByOiid = {};
+  (order?.items || []).forEach((oi) => {
+    if (oi.oiid != null) orderItemsByOiid[oi.oiid] = oi;
+  });
+
+  return productRows.map((row) => {
+    const oiid = row.id ?? row.oiid;
+    const orderItem = oiid != null ? orderItemsByOiid[oiid] : null;
+
+    let boughtKg = getStage4BoughtWeightKg(row, remaining, { isBoxBasedOrder: boxOrder });
+    if (boughtKg <= 0 && oiid != null) {
+      boughtKg = sumStage1PickedKgForOiid(oiid, stage1Assignments, orderItem);
+    }
+    if (boughtKg <= 0 && oiid != null) {
+      boughtKg = stage2Picked[String(oiid)] || 0;
+    }
+
+    const sellingKg = parseKg(row.net_weight ?? row.quantity);
+    const price = parseFloat(row.price ?? row.final_price ?? row.marketPrice ?? 0) || 0;
+    const total = boughtKg * price;
+
+    return {
+      productName: row.product_name || row.product || '-',
+      boughtKg,
+      sellingKg,
+      price,
+      total,
+    };
+  });
+}
+
+export function getStage4ReportGrandTotal(stage4Data, assignment, order) {
+  return buildStage4ReportRows(stage4Data, assignment, order).reduce((s, r) => s + r.total, 0);
+}
 
 const ReportOrderView = () => {
     const { orderId } = useParams();
@@ -24,6 +304,7 @@ const ReportOrderView = () => {
     const [labourRates, setLabourRates] = useState([]);
     const [driverRates, setDriverRates] = useState([]);
     const [fuelExpenses, setFuelExpenses] = useState([]);
+    const [excessKmRecords, setExcessKmRecords] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -59,6 +340,7 @@ const ReportOrderView = () => {
             let stage4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
             stage4ProductRows = stage4Data.reviewData?.productRows || stage4Data.productRows || [];
         }
+        const { netByProduct: stage4NetByProduct, priceByProduct: stage4PriceByProduct } = buildStage4Maps(stage4ProductRows);
 
         // Prepare Stage 2 Labour Map from stage2_data (PRIMARY SOURCE)
         let stage2LabourMap = {};
@@ -133,6 +415,11 @@ const ReportOrderView = () => {
         }
 
         let productsByDriver = {};
+        const weightSplitMap = buildStage3WeightSplitMap(
+            deliveryData,
+            order?.items || [],
+            stage4NetByProduct
+        );
 
         deliveryData.forEach((item) => {
             const product = item.product || item.productName || '-';
@@ -140,7 +427,17 @@ const ReportOrderView = () => {
             let driverInfo = null;
 
             if (item.selectedDriver) {
-                driverInfo = drivers.find(d => d.did == item.selectedDriver || d.driver_id == item.selectedDriver);
+                driverInfo = drivers.find(
+                    (d) =>
+                        String(d.did) === String(item.selectedDriver) ||
+                        String(d.driver_id) === String(item.selectedDriver)
+                );
+                if (!driverInfo) {
+                    const did = resolveDriverDid(drivers, item.selectedDriver);
+                    if (did != null) {
+                        driverInfo = drivers.find((d) => String(d.did) === String(did));
+                    }
+                }
                 if (driverInfo) driverName = driverInfo.driver_name;
             }
 
@@ -173,15 +470,19 @@ const ReportOrderView = () => {
             }
 
             if (!productsByDriver[driverName].driverInfo && driverName !== 'Unassigned') {
-                productsByDriver[driverName].driverInfo = drivers.find(d => d.driver_name === driverName) || { mobile_number: '', vehicle_number: '' };
+                const did = resolveDriverDid(drivers, driverName);
+                productsByDriver[driverName].driverInfo =
+                    drivers.find((d) => String(d.did) === String(did)) ||
+                    drivers.find((d) => (d.driver_name || '').toLowerCase() === driverName.toLowerCase()) ||
+                    { mobile_number: '', vehicle_number: '' };
             }
 
-            const grossWeightStr = item.grossWeight || item.gross_weight || '0';
-            const grossWeight = parseFloat(grossWeightStr.toString().replace(/[^0-9.]/g, '')) || 0;
+            const split = getSplitWeightForRow(item, weightSplitMap);
+            const displayKg = split.displayKg;
+            const netWeight = split.netKg > 0 ? split.netKg : split.grossKg;
 
-            const stage4Product = stage4ProductRows.find(p4 => (p4.product_name || p4.product || p4.productName) === product);
-            const pricePerKg = stage4Product ? parseFloat(stage4Product.price || stage4Product.final_price || 0) : 0;
-            const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : grossWeight;
+            const productKey = normalizeProductName(product);
+            const pricePerKg = stage4PriceByProduct[productKey] || 0;
             const productTotal = pricePerKg * netWeight;
             const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
 
@@ -191,20 +492,23 @@ const ReportOrderView = () => {
 
             productsByDriver[driverName].products.push({
                 product: product,
-                grossWeight: grossWeight,
+                grossWeight: displayKg,
+                netWeight,
                 rate: pricePerKg,
                 amount: productTotal,
                 box: noOfPkgs,
                 ct: item.ct || item.CT,
                 labour: item.labour || item.labourName || stage2LabourMap[product],
-                packingType: item.packingType || item.packing_type || '', // Capture Packing Type
+                packingType: item.packingType || item.packing_type || '',
                 sNo: productsByDriver[driverName].products.length + 1
             });
 
             productsByDriver[driverName].totalAmount += productTotal;
-            productsByDriver[driverName].totalWeight += grossWeight;
+            productsByDriver[driverName].totalWeight += displayKg;
             productsByDriver[driverName].totalBoxes += noOfPkgs;
         });
+
+        assignStage4NetToDrivers(productsByDriver);
 
         // Attach airportCode from Airport Delivery Summary (prefer stage3_summary_data.airportGroups so backend-saved codes show)
         const groupsForCode = Object.keys(summaryAirportGroups || {}).length ? summaryAirportGroups : airportGroups;
@@ -260,8 +564,33 @@ const ReportOrderView = () => {
             driverData.tapeQuantity = qty;
         });
 
+        const stage2LabourWageMap = buildStage2LabourWageMap(assignment);
+
+        Object.entries(productsByDriver).forEach(([driverNameKey, driverData]) => {
+            const driverRef =
+                driverData.driverInfo?.did ||
+                driverData.driverInfo?.driver_id ||
+                driverData.driverInfo?.driver_name ||
+                driverNameKey;
+            driverData.localOrder = getDriverPayoutExcessForReport(
+                driverRef,
+                order?.order_received_date,
+                excessKmRecords,
+                driverRates,
+                fuelExpenses,
+                drivers
+            );
+            const { rows, labourCost } = computeLabourExpenseForProducts(
+                driverData.products,
+                stage2LabourWageMap,
+                labourRates
+            );
+            driverData.labourRows = rows;
+            driverData.labourCost = labourCost;
+        });
+
         return productsByDriver;
-    }, [assignment, drivers, assignment?.stage2_data, assignment?.stage2_summary_data, assignment?.stage3_data, assignment?.stage4_data, fuelExpenses, order]);
+    }, [assignment, drivers, driverRates, excessKmRecords, labourRates, assignment?.stage2_data, assignment?.stage2_summary_data, assignment?.stage3_data, assignment?.stage4_data, fuelExpenses, order]);
 
     const handleExportPDF = () => {
         if (!processedReportData || !order || !assignment) return;
@@ -473,13 +802,7 @@ const ReportOrderView = () => {
             const price10kg = getStockPrice('10 kg box') || 80; const price5kg = getStockPrice('5 kg box') || 45; const priceThermo = getStockPrice('thermo') || 145; const priceNetBag = getStockPrice('net bag') || 0;
             const cost10kg = count10kg * price10kg; const cost5kg = count5kg * price5kg; const costThermo = countThermo * priceThermo; const costNetBag = countNetBag * priceNetBag;
             const totalBoxCost = cost10kg + cost5kg + costThermo + costNetBag;
-
-            const uniqueLabours = [...new Set(data.products.map(p => p.labour).filter(l => l).flatMap(l => l.split(',').map(n => n.trim())))];
-            const labourCount = uniqueLabours.length;
-            const normalRateObj = labourRates.find(r => r.labourType?.toLowerCase() === 'normal' && r.status === 'Active');
-            const labourRate = normalRateObj ? parseFloat(normalRateObj.amount) : 0;
-            const labourCost = labourCount * labourRate;
-            const labourNamesStr = uniqueLabours.length > 0 ? `(${cleanText(uniqueLabours.join(', '))})` : '';
+            const netWeightForCalc = getDriverNetWeight(data, { count10kg, count5kg, countThermo, countNetBag });
 
             const pickupCost = getStockPrice('pickup') || 0;
             const tapeUnitPrice = getStockPrice('tape') || 0;
@@ -488,8 +811,12 @@ const ReportOrderView = () => {
             const tapeCost = tapeUnitPrice * tapeQuantity + paperPrice;
             const driverRateObj = driverRates.find(r => r.deliveryType?.toLowerCase().includes('airport') && r.status === 'Active') || driverRates.find(r => r.status === 'Active');
             const driverWage = driverRateObj ? parseFloat(driverRateObj.amount) : 0;
-            const totalOverhead = labourCost + pickupCost + tapeCost + driverWage; const totalExpenses = totalBoxCost + totalOverhead;
-            const vegTotal = data.totalAmount; const grandTotal = vegTotal + totalExpenses; const grandTotalPerKg = Math.round(grandTotal / (data.totalWeight > 0 ? data.totalWeight : 1));
+            const localOrder = data.localOrder || { totalKmDriven: 0, excessKm: 0, amount: 0 };
+            const localOrderAmount = localOrder.amount || 0;
+            const labourCost = data.labourCost || 0;
+            const totalOverhead = pickupCost + tapeCost + driverWage + localOrderAmount + labourCost;
+            const totalExpenses = totalBoxCost + totalOverhead;
+            const vegTotal = data.totalAmount; const grandTotal = vegTotal + totalExpenses; const grandTotalPerKg = Math.round(grandTotal / (netWeightForCalc > 0 ? netWeightForCalc : 1));
 
             const pkgBody = [];
             pkgBody.push([{ content: 'Expenses', styles: { fontStyle: 'bold', fillColor: [229, 231, 235] } }, { content: 'Count', styles: { halign: 'center', fillColor: [229, 231, 235] } }, { content: 'Rate', styles: { halign: 'center', fillColor: [229, 231, 235] } }, { content: 'Total', styles: { halign: 'right', fillColor: [229, 231, 235] } }]);
@@ -497,13 +824,19 @@ const ReportOrderView = () => {
             if (count5kg > 0) pkgBody.push(['05 KG BOX', count5kg, price5kg, cost5kg]);
             if (countThermo > 0) pkgBody.push(['THERMO BOX', countThermo, priceThermo, costThermo]);
             if (countNetBag > 0) pkgBody.push(['NET BAG', countNetBag, priceNetBag, costNetBag]);
-            pkgBody.push([`LABOUR ${cleanText(labourNamesStr)}`, labourCount, labourRate, labourCost]);
+            (data.labourRows || []).forEach(({ name, amount }) => {
+                pkgBody.push([`LABOUR (${name})`, 1, amount, amount]);
+            });
             pkgBody.push([{ content: 'PICKUP', colSpan: 3 }, pickupCost]);
+            {
+                const lo = localOrder || { amount: 0 };
+                pkgBody.push([{ content: cleanText(formatLocalOrderReportLabel()), colSpan: 3 }, lo.amount]);
+            }
             if (tapeCost > 0) pkgBody.push([{ content: 'TAPE & PAPER', colSpan: 3 }, tapeCost]);
             pkgBody.push([{ content: 'DRIVER WAGE', colSpan: 3 }, driverWage]);
             pkgBody.push([{ content: 'TOTAL EXPENSES:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: totalExpenses.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
             pkgBody.push([{ content: 'VEG TOTAL:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: vegTotal.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
-            pkgBody.push([{ content: `GRAND TOTAL (${data.totalWeight.toFixed(0)}kg):`, colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: grandTotalPerKg.toFixed(0), styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
+            pkgBody.push([{ content: `GRAND TOTAL (NET ${netWeightForCalc.toFixed(0)}kg):`, colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: grandTotalPerKg.toFixed(0), styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
 
             doc.autoTable({
                 startY: doc.lastAutoTable.finalY,
@@ -520,8 +853,8 @@ const ReportOrderView = () => {
         if (assignment.stage4_data) {
             if (finalY > 250) { doc.addPage(); finalY = 20; }
             let s4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
-            let productRows = s4Data.reviewData?.productRows || s4Data.productRows || [];
-            let s4Total = 0;
+            const s4ReportRows = buildStage4ReportRows(s4Data, assignment, order);
+            const s4Total = s4ReportRows.reduce((s, r) => s + r.total, 0);
 
             doc.setFillColor(236, 253, 245);
             doc.rect(14, finalY - 2, 182, 8, 'F');
@@ -531,18 +864,17 @@ const ReportOrderView = () => {
             doc.text("Stage 4: Final Pricing", 16, finalY + 4);
             doc.setFont(undefined, 'normal');
 
-            const s4Body = productRows.map(item => {
-                const net = parseFloat(item.net_weight || item.quantity || 0);
-                const price = parseFloat(item.price || item.final_price || 0);
-                const total = net * price;
-                s4Total += total;
-                return [cleanText(item.product_name || item.product), net.toFixed(2), `Rs. ${price.toFixed(2)}`, `Rs. ${total.toFixed(2)}`];
-            });
+            const s4Body = s4ReportRows.map((row) => [
+                cleanText(row.productName),
+                row.boughtKg.toFixed(2),
+                `Rs. ${row.price.toFixed(2)}`,
+                `Rs. ${row.total.toFixed(2)}`,
+            ]);
             s4Body.push([{ content: 'Grand Total:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: `Rs. ${s4Total.toFixed(2)}`, styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
 
             doc.autoTable({
                 startY: finalY + 7,
-                head: [['Product', 'Net Weight (kg)', 'Price/kg', 'Total']],
+                head: [['Product', 'Bought Weight (kg)', 'Price/kg', 'Total']],
                 body: s4Body,
                 theme: 'striped',
                 headStyles: { fillColor: [16, 185, 129], textColor: 255, fontStyle: 'bold', fontSize: 9 },
@@ -691,11 +1023,7 @@ const ReportOrderView = () => {
             const price10kg = getStockPrice('10 kg box') || 80; const price5kg = getStockPrice('5 kg box') || 45; const priceThermo = getStockPrice('thermo') || 145; const priceNetBag = getStockPrice('net bag') || 0;
             const cost10kg = count10kg * price10kg; const cost5kg = count5kg * price5kg; const costThermo = countThermo * priceThermo; const costNetBag = countNetBag * priceNetBag;
             const totalBoxCost = cost10kg + cost5kg + costThermo + costNetBag;
-
-            const uniqueLabours = [...new Set(data.products.map(p => p.labour).filter(l => l).flatMap(l => l.split(',').map(n => n.trim())))];
-            const labourCount = uniqueLabours.length; const normalRateObj = labourRates.find(r => r.labourType?.toLowerCase() === 'normal' && r.status === 'Active');
-            const labourRate = normalRateObj ? parseFloat(normalRateObj.amount) : 0; const labourCost = labourCount * labourRate;
-            const labourNamesStr = uniqueLabours.length > 0 ? `(${uniqueLabours.join(', ')})` : '';
+            const netWeightForCalc = getDriverNetWeight(data, { count10kg, count5kg, countThermo, countNetBag });
 
             const pickupCost = getStockPrice('pickup') || 0;
             const tapeUnitPrice = getStockPrice('tape') || 0;
@@ -704,8 +1032,12 @@ const ReportOrderView = () => {
             const tapeCost = tapeUnitPrice * tapeQuantity + paperPrice;
             const driverRateObj = driverRates.find(r => r.deliveryType?.toLowerCase().includes('airport') && r.status === 'Active') || driverRates.find(r => r.status === 'Active');
             const driverWage = driverRateObj ? parseFloat(driverRateObj.amount) : 0;
-            const totalOverhead = labourCost + pickupCost + tapeCost + driverWage; const totalExpenses = totalBoxCost + totalOverhead;
-            const vegTotal = data.totalAmount; const grandTotal = vegTotal + totalExpenses; const grandTotalPerKg = Math.round(grandTotal / (data.totalWeight > 0 ? data.totalWeight : 1));
+            const localOrder = data.localOrder || { totalKmDriven: 0, excessKm: 0, amount: 0 };
+            const localOrderAmount = localOrder.amount || 0;
+            const labourCost = data.labourCost || 0;
+            const totalOverhead = pickupCost + tapeCost + driverWage + localOrderAmount + labourCost;
+            const totalExpenses = totalBoxCost + totalOverhead;
+            const vegTotal = data.totalAmount; const grandTotal = vegTotal + totalExpenses; const grandTotalPerKg = Math.round(grandTotal / (netWeightForCalc > 0 ? netWeightForCalc : 1));
 
             // Rows
             allRows.push([{ v: `${dayName} | ${fullDate}`, s: { fill: { fgColor: { rgb: "F9FAFB" } }, font: { bold: true } } }, cell(data.airportCode || 'GVT'), cell(data.airportName || 'Airport'), '', '', '']); currentRow++;
@@ -724,17 +1056,25 @@ const ReportOrderView = () => {
             if (count5kg > 0) { allRows.push([cell('05 KG BOX'), cell(count5kg), cell(price5kg), cell(cost5kg)]); currentRow++; }
             if (countThermo > 0) { allRows.push([cell('THERMO BOX'), cell(countThermo), cell(priceThermo), cell(costThermo)]); currentRow++; }
             if (countNetBag > 0) { allRows.push([cell('NET BAG'), cell(countNetBag), cell(priceNetBag), cell(costNetBag)]); currentRow++; }
-
-            allRows.push([cell(`LABOUR ${labourNamesStr}`), cell(labourCount), cell(labourRate), cell(labourCost)]); currentRow++;
+            (data.labourRows || []).forEach(({ name, amount }) => {
+                allRows.push([cell(`LABOUR (${name})`), cell(1), cell(amount), cell(amount)]);
+                currentRow++;
+            });
 
             allRows.push([cell('PICKUP'), '', '', cell(pickupCost)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++;
+            {
+                const lo = localOrder || { amount: 0 };
+                allRows.push([cell(formatLocalOrderReportLabel()), '', '', cell(lo.amount)]);
+                merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } });
+                currentRow++;
+            }
             if (tapeCost > 0) { allRows.push([cell('TAPE & PAPER'), '', '', cell(tapeCost)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++; }
             allRows.push([cell('DRIVER WAGE'), '', '', cell(driverWage)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++;
 
             allRows.push([cell('TOTAL EXPENSES:', 'highlight'), '', '', '', '', cell(totalExpenses.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
             allRows.push([cell('VEG TOTAL:', 'highlight'), '', '', '', '', cell(vegTotal.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
             allRows.push([cell('GRAND TOTAL:', 'highlight'), '', '', '', '', cell(grandTotal.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
-            allRows.push([cell(`GRAND TOTAL PER KG (${data.totalWeight.toFixed(0)}kg):`, 'bold'), '', '', '', '', cell(grandTotalPerKg.toFixed(0), 'bold')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            allRows.push([cell(`GRAND TOTAL PER KG (NET ${netWeightForCalc.toFixed(0)}kg):`, 'bold'), '', '', '', '', cell(grandTotalPerKg.toFixed(0), 'bold')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
 
             allRows.push([]); currentRow++;
             allRows.push([]); currentRow++;
@@ -742,17 +1082,13 @@ const ReportOrderView = () => {
 
         // Stage 4
         allRows.push([cell('STAGE 4: FINAL PRICING', 'sectionPurple'), '', '', '', '', '']); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 5 } }); currentRow++;
-        allRows.push([cell('Product', 'header'), cell('Net Weight (kg)', 'header'), cell('Price/kg', 'header'), cell('Total', 'header'), '', '']); currentRow++;
+        allRows.push([cell('Product', 'header'), cell('Bought Weight (kg)', 'header'), cell('Price/kg', 'header'), cell('Total', 'header'), '', '']); currentRow++;
         if (assignment.stage4_data) {
             let s4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
-            let productRows = s4Data.reviewData?.productRows || s4Data.productRows || [];
-            let s4Total = 0;
-            productRows.forEach(item => {
-                const net = parseFloat(item.net_weight || item.quantity || 0);
-                const price = parseFloat(item.price || item.final_price || 0);
-                const total = net * price;
-                s4Total += total;
-                allRows.push([cell(item.product_name || item.product), cell(net.toFixed(2)), cell(price.toFixed(2)), cell(total.toFixed(2))]);
+            const s4ReportRows = buildStage4ReportRows(s4Data, assignment, order);
+            const s4Total = s4ReportRows.reduce((s, r) => s + r.total, 0);
+            s4ReportRows.forEach((row) => {
+                allRows.push([cell(row.productName), cell(row.boughtKg.toFixed(2)), cell(row.price.toFixed(2)), cell(row.total.toFixed(2))]);
                 currentRow++;
             });
             allRows.push([cell('Grand Total:', 'highlight'), '', '', cell(s4Total.toFixed(2), 'highlight'), '', '']); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++;
@@ -770,12 +1106,14 @@ const ReportOrderView = () => {
             setLoading(true);
 
             // Fetch drivers, inventory, labour rates, driver rates, and fuel expenses concurrently
-            const [driversResponse, stockResponse, ratesResponse, driverRatesResponse, fuelExpensesResponse] = await Promise.all([
+            const [driversResponse, stockResponse, ratesResponse, driverRatesResponse, fuelExpensesResponse, excessKmResponse, ordersResponse] = await Promise.all([
                 getAllDrivers(),
                 getAllInventory(1, 1000),
                 getAllLabourRates(),
                 getAllDriverRates(),
-                getAllFuelExpenses()
+                getAllFuelExpenses(),
+                getAllExcessKMs().catch(() => ({ data: [] })),
+                getAllOrders()
             ]);
 
             if (driversResponse.success && driversResponse.data) {
@@ -819,10 +1157,17 @@ const ReportOrderView = () => {
                 }
             }
 
-            // Fetch all orders
-            const ordersResponse = await getAllOrders();
+            if (excessKmResponse) {
+                if (Array.isArray(excessKmResponse)) {
+                    setExcessKmRecords(excessKmResponse);
+                } else if (Array.isArray(excessKmResponse.data)) {
+                    setExcessKmRecords(excessKmResponse.data);
+                } else if (excessKmResponse.success && Array.isArray(excessKmResponse.data)) {
+                    setExcessKmRecords(excessKmResponse.data);
+                }
+            }
 
-            if (ordersResponse.success && ordersResponse.data) {
+            if (ordersResponse?.success && ordersResponse.data) {
                 const foundOrder = ordersResponse.data.find(o => {
                     const matchOid = o.oid === orderId;
                     const matchAutoId = o.order_auto_id === orderId;
@@ -929,16 +1274,7 @@ const ReportOrderView = () => {
                 ? JSON.parse(assignment.stage4_data)
                 : assignment.stage4_data;
 
-            const productRows = stage4Data.reviewData?.productRows || stage4Data.productRows || [];
-
-            let grandTotal = 0;
-            productRows.forEach((item) => {
-                const netWeight = parseFloat(item.net_weight || item.quantity || 0);
-                const price = parseFloat(item.price || item.final_price || 0);
-                grandTotal += netWeight * price;
-            });
-
-            return grandTotal;
+            return getStage4ReportGrandTotal(stage4Data, assignment, order);
         } catch (e) {
             console.error('Error calculating grand total from stage4_data', e);
             return 0;
@@ -1388,6 +1724,7 @@ const ReportOrderView = () => {
                                             let stage4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
                                             stage4ProductRows = stage4Data.reviewData?.productRows || stage4Data.productRows || [];
                                         }
+                                        const { netByProduct: stage4NetByProductHtml, priceByProduct: stage4PriceByProductHtml } = buildStage4Maps(stage4ProductRows);
 
                                         // Prepare Stage 2 Labour Map from stage2_data (PRIMARY SOURCE)
                                         let stage2LabourMap = {};
@@ -1483,6 +1820,11 @@ const ReportOrderView = () => {
 
                                         // Group products by driver
                                         let productsByDriver = {};
+                                        const weightSplitMapHtml = buildStage3WeightSplitMap(
+                                            deliveryData,
+                                            order?.items || [],
+                                            stage4NetByProductHtml
+                                        );
                                         deliveryData.forEach((item) => {
                                             const product = item.product || item.productName || '-';
                                             let driverName = '';
@@ -1533,15 +1875,12 @@ const ReportOrderView = () => {
                                                 productsByDriver[driverName].driverInfo = drivers.find(d => d.driver_name === driverName) || { mobile_number: '', vehicle_number: '' };
                                             }
 
-                                            const grossWeightStr = item.grossWeight || item.gross_weight || '0';
-                                            const grossWeight = parseFloat(grossWeightStr.toString().replace(/[^0-9.]/g, '')) || 0;
+                                            const split = getSplitWeightForRow(item, weightSplitMapHtml);
+                                            const displayKg = split.displayKg;
+                                            const netWeight = split.netKg > 0 ? split.netKg : split.grossKg;
 
-                                            // Get pricing from Stage 4
-                                            const stage4Product = stage4ProductRows.find(p4 =>
-                                                (p4.product_name || p4.product || p4.productName) === product
-                                            );
-                                            const pricePerKg = stage4Product ? parseFloat(stage4Product.price || stage4Product.final_price || 0) : 0;
-                                            const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : grossWeight;
+                                            const productKey = normalizeProductName(product);
+                                            const pricePerKg = stage4PriceByProductHtml[productKey] || 0;
                                             const productTotal = pricePerKg * netWeight;
                                             const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
 
@@ -1551,20 +1890,23 @@ const ReportOrderView = () => {
 
                                             productsByDriver[driverName].products.push({
                                                 product: product,
-                                                grossWeight: grossWeight, // Displayed as KGS
+                                                grossWeight: displayKg,
+                                                netWeight,
                                                 rate: pricePerKg,
                                                 amount: productTotal,
                                                 box: noOfPkgs,
                                                 ct: item.ct || item.CT,
                                                 labour: item.labour || item.labourName || stage2LabourMap[product],
-                                                packingType: item.packingType || item.packing_type || '', // Capture Packing Type
+                                                packingType: item.packingType || item.packing_type || '',
                                                 sNo: productsByDriver[driverName].products.length + 1
                                             });
 
                                             productsByDriver[driverName].totalAmount += productTotal;
-                                            productsByDriver[driverName].totalWeight += grossWeight;
+                                            productsByDriver[driverName].totalWeight += displayKg;
                                             productsByDriver[driverName].totalBoxes += noOfPkgs;
                                         });
+
+                                        assignStage4NetToDrivers(productsByDriver);
 
                                         const orderDate = new Date(order.order_received_date);
                                         const dayName = orderDate.toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
@@ -1661,39 +2003,6 @@ const ReportOrderView = () => {
                                             const costNetBag = countNetBag * priceNetBag;
                                             const totalBoxCost = cost10kg + cost5kg + costThermo + costNetBag;
 
-                                            // Overheads
-                                            const uniqueLabours = [...new Set(
-                                                data.products
-                                                    .map(p => p.labour)
-                                                    .filter(l => l && l !== '-' && l !== '')
-                                                    .flatMap(l => l.split(',').map(name => name.trim()))
-                                            )];
-                                            const labourCount = uniqueLabours.length;
-
-                                            // Base (fallback) labour rate from master rates
-                                            const normalRateObj = labourRates.find(
-                                                r => r.labourType?.toLowerCase() === 'normal' && r.status === 'Active'
-                                            );
-                                            const defaultLabourRate = normalRateObj
-                                                ? parseFloat(normalRateObj.amount)
-                                                : 0;
-
-                                            // Use per‑labour wages saved in Stage 2 summary when available
-                                            let labourCost = 0;
-                                            uniqueLabours.forEach(name => {
-                                                const wageFromStage2 = stage2LabourWageMap[name];
-                                                const wage = (typeof wageFromStage2 === 'number' && !isNaN(wageFromStage2))
-                                                    ? wageFromStage2
-                                                    : defaultLabourRate;
-                                                labourCost += wage;
-                                            });
-
-                                            // For display in the "Rate" column, show average wage per labour
-                                            const labourRate = labourCount > 0
-                                                ? Math.round(labourCost / labourCount)
-                                                : defaultLabourRate;
-                                            const labourNamesStr = uniqueLabours.length > 0 ? `(${uniqueLabours.join(', ')})` : '';
-
                                             const pickupCost = getStockPrice('pickup') || 0;
                                             const tapeUnitPrice = getStockPrice('tape') || 0;
                                             const tapeQuantity = (() => {
@@ -1744,20 +2053,32 @@ const ReportOrderView = () => {
                                                 || driverRates.find(r => r.status === 'Active');
                                             const driverWage = driverRateObj ? parseFloat(driverRateObj.amount) : 0;
 
-                                            // Get fuel expense for this driver on the order date
                                             const driverId = data.driverInfo?.did || data.driverInfo?.driver_id || null;
                                             const fuelExpense = driverId ? getFuelExpenseForDriver(driverId, order.order_received_date) : 0;
+                                            const localOrder = getDriverPayoutExcessForReport(
+                                                driverId || data.driverInfo?.driver_name,
+                                                order.order_received_date,
+                                                excessKmRecords,
+                                                driverRates,
+                                                fuelExpenses,
+                                                drivers
+                                            );
+                                            const localOrderAmount = localOrder.amount || 0;
+                                            const { rows: labourRows, labourCost } = computeLabourExpenseForProducts(
+                                                data.products,
+                                                stage2LabourWageMap,
+                                                labourRates
+                                            );
 
-                                            const totalOverhead = labourCost + pickupCost + tapeCost + driverWage + fuelExpense;
+                                            const totalOverhead =
+                                                pickupCost + tapeCost + driverWage + fuelExpense + localOrderAmount + labourCost;
 
                                             // Totals
                                             const totalExpenses = totalBoxCost + totalOverhead;
                                             const vegExpenses = data.totalAmount;
 
                                             // Weight Logic
-                                            const grossWeight = data.totalWeight;
-                                            const tareWeight = (count10kg * 1.5) + (count5kg * 1.0) + (countThermo * 0.5); // Estimate tare based on mix
-                                            const netWeight = grossWeight - tareWeight;
+                                            const netWeight = getDriverNetWeight(data, { count10kg, count5kg, countThermo, countNetBag });
 
                                             const totalExpPerKg = netWeight > 0 ? ((vegExpenses + totalExpenses) / netWeight).toFixed(0) : 0;
                                             const driverNameWithNum = `${(driverName || '').toString().toUpperCase()}`.trim();
@@ -1846,27 +2167,22 @@ const ReportOrderView = () => {
                                                                         <td className="p-1 text-right pr-2">{costNetBag}</td>
                                                                     </tr>
                                                                 )}
+                                                                {labourRows.map(({ name, amount }) => (
+                                                                    <tr key={name} className="border-b border-gray-200">
+                                                                        <td className="p-1 pl-4" colSpan="3">{`LABOUR (${name})`}</td>
+                                                                        <td className="p-1 text-right pr-2">{amount}</td>
+                                                                    </tr>
+                                                                ))}
 
-                                                                {/* Other Expenses */}
-                                                                {/* Show each labour's wage individually using Stage 2 summary data */}
-                                                                {uniqueLabours.map((name, idx) => {
-                                                                    const wageFromStage2 = stage2LabourWageMap[name];
-                                                                    const wage = (typeof wageFromStage2 === 'number' && !isNaN(wageFromStage2))
-                                                                        ? wageFromStage2
-                                                                        : labourRate; // fallback to avg/default rate
-                                                                    return (
-                                                                        <tr key={`labour-row-${idx}`} className="border-b border-gray-200">
-                                                                            <td className="p-1 pl-4">LABOUR ({name})</td>
-                                                                            <td className="p-1 text-center">1</td>
-                                                                            <td className="p-1 text-center">{wage}</td>
-                                                                            <td className="p-1 text-right pr-2">{wage}</td>
-                                                                        </tr>
-                                                                    );
-                                                                })}
-                                                                {/* Driver wage shown as "Driver Name + PICKUP" */}
                                                                 <tr className="border-b border-gray-200">
                                                                     <td className="p-1 pl-4" colSpan="3">{driverNameWithNum} PICKUP</td>
                                                                     <td className="p-1 text-right pr-2">{driverWage}</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">LOCAL ORDER</td>
+                                                                    <td className="p-1 text-right pr-2">
+                                                                        {localOrder.amount.toFixed(2)}
+                                                                    </td>
                                                                 </tr>
                                                                 <tr className="border-b border-gray-200">
                                                                     <td className="p-1 pl-4" colSpan="3">TAPE & PAPER</td>
@@ -1918,7 +2234,7 @@ const ReportOrderView = () => {
                                         <thead className="bg-[#0D8568] text-white">
                                             <tr>
                                                 <th className="px-4 py-3 text-left">Product</th>
-                                                <th className="px-4 py-3 text-left">Net Weight (kg)</th>
+                                                <th className="px-4 py-3 text-left">Bought Weight (kg)</th>
                                                 <th className="px-4 py-3 text-left">Price/kg (₹)</th>
                                                 <th className="px-4 py-3 text-left">Total Amount (₹)</th>
                                             </tr>
@@ -1926,24 +2242,17 @@ const ReportOrderView = () => {
                                         <tbody>
                                             {(() => {
                                                 let stage4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
-                                                let productRows = stage4Data.reviewData?.productRows || stage4Data.productRows || [];
-                                                let grandTotal = 0;
+                                                const s4ReportRows = buildStage4ReportRows(stage4Data, assignment, order);
+                                                let grandTotal = s4ReportRows.reduce((s, r) => s + r.total, 0);
 
-                                                const rows = productRows.map((item, idx) => {
-                                                    const netWeight = parseFloat(item.net_weight || item.quantity || 0);
-                                                    const price = parseFloat(item.price || item.final_price || 0);
-                                                    const total = netWeight * price;
-                                                    grandTotal += total;
-
-                                                    return (
-                                                        <tr key={idx} className="border-b border-[#D0E0DB] hover:bg-[#F0F4F3]">
-                                                            <td className="px-4 py-3">{item.product_name || item.product || '-'}</td>
-                                                            <td className="px-4 py-3">{netWeight.toFixed(2)}</td>
-                                                            <td className="px-4 py-3">{formatCurrency(price)}</td>
-                                                            <td className="px-4 py-3 font-semibold">{formatCurrency(total)}</td>
-                                                        </tr>
-                                                    );
-                                                });
+                                                const rows = s4ReportRows.map((row, idx) => (
+                                                    <tr key={idx} className="border-b border-[#D0E0DB] hover:bg-[#F0F4F3]">
+                                                        <td className="px-4 py-3">{row.productName}</td>
+                                                        <td className="px-4 py-3">{row.boughtKg.toFixed(2)}</td>
+                                                        <td className="px-4 py-3">{formatCurrency(row.price)}</td>
+                                                        <td className="px-4 py-3 font-semibold">{formatCurrency(row.total)}</td>
+                                                    </tr>
+                                                ));
 
                                                 rows.push(
                                                     <tr key="total" className="bg-[#D1FAE5] font-bold text-lg">

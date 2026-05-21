@@ -31,3 +31,33 @@ export const deleteProduct = async (id) => {
   const response = await api.delete(`/product/${id}`);
   return response.data;
 };
+
+/** Load all products (paginated API) for dropdowns. */
+export async function fetchAllProducts() {
+  const limit = 100;
+  let page = 1;
+  let allRows = [];
+
+  while (true) {
+    const res = await getAllProducts(page, limit);
+    const rows = res?.data || [];
+    allRows.push(...rows);
+
+    const totalPages = res?.pagination?.totalPages;
+    if ((totalPages && page >= totalPages) || rows.length < limit) break;
+    page += 1;
+  }
+
+  const byId = new Map();
+  allRows.forEach((row) => {
+    if (row?.pid != null) byId.set(row.pid, row);
+  });
+  return Array.from(byId.values());
+}
+
+export function mapProductsForDropdown(products) {
+  return (products || []).map((p) => ({
+    id: p.pid,
+    name: p.product_name,
+  }));
+}

@@ -9,14 +9,306 @@ import {
   Eye,
   Edit,
   Trash2,
-  Download
+  Download,
+  Phone,
+  Mail,
+  MapPin,
+  Loader2
 } from 'lucide-react';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { getAllFarmers, deleteFarmer } from '../../../api/farmerApi';
-import { getAllProducts } from '../../../api/productApi';
+import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
+import { fetchAllProducts } from '../../../api/productApi';
 import { BASE_URL } from '../../../config/config';
-import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../utils/managementPayoutStats';
+import { getOrderEntityPayoutAmounts, formatInrPayout } from '../../../api/payoutApi';
 import * as XLSX from 'xlsx-js-style';
+
+const normalizeProductLabel = (name) => {
+  if (!name) return '';
+  let s = String(name).replace(/^\d+\s*-\s*/, '').trim();
+  const paren = s.indexOf('(');
+  if (paren > 0) s = s.slice(0, paren).trim();
+  return s.toLowerCase();
+};
+
+const productsMatchForFarmerFilter = (orderProduct, availabilityName) => {
+  const a = normalizeProductLabel(orderProduct);
+  const b = normalizeProductLabel(availabilityName);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+};
+
+/** YYYY-MM-DD in local calendar (avoids UTC shift on date-only strings). */
+export const toLocalDateString = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const normalizeDateStr = (value) => {
+  if (!value) return '';
+  return String(value).split('T')[0].trim();
+};
+
+const parseDateOnly = (value) => {
+  const str = normalizeDateStr(value);
+  if (!str) return null;
+  const [y, m, d] = str.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const date = new Date(y, m - 1, d);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+/** Product net weight (kg) from catalog or name e.g. "GINGER 5kg". */
+export const parseProductWeightKg = (productName, netWeight) => {
+  const fromField = parseFloat(netWeight);
+  if (Number.isFinite(fromField) && fromField > 0) return fromField;
+  const match = String(productName || '').match(/(\d+(?:\.\d+)?)\s*kg/i);
+  return match ? parseFloat(match[1]) : 0;
+};
+
+const MS_PER_DAY = 86400000;
+const BASE_WEIGHT_KG = 5;
+
+/**
+ * Calendar days until availability starts (0 = in range today).
+ * Scales lead time by package weight vs 5 kg baseline (heavier → more days).
+ */
+export const getAvailabilityDaysFromRecord = (item, weightKg = BASE_WEIGHT_KG) => {
+  if (!item || item.status !== 'Available') return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const from = parseDateOnly(item.from_date);
+  const to = parseDateOnly(item.to_date);
+  if (!from || !to) return null;
+  if (today > to) return null;
+
+  let calendarDays = 0;
+  if (today < from) {
+    calendarDays = Math.ceil((from - today) / MS_PER_DAY);
+  }
+
+  const w = weightKg > 0 ? weightKg : BASE_WEIGHT_KG;
+  if (calendarDays === 0) return 0;
+  return Math.max(1, Math.ceil(calendarDays * (w / BASE_WEIGHT_KG)));
+};
+
+export const formatAvailabilityDaysLabel = (days) => {
+  if (days === null || days === undefined) return 'Not available';
+  if (days === 0) return 'Available now';
+  if (days === 1) return 'Available in 1 day';
+  return `Available in ${days} days`;
+};
+
+/** 0 = avail now, 1 = upcoming, 2 = not available */
+export const getAvailabilityTier = (days) => {
+  if (days === null || days === undefined) return 2;
+  if (days === 0) return 0;
+  if (days > 0) return 1;
+  return 2;
+};
+
+/** Available first, then upcoming, then not available at the bottom */
+export const sortAvailabilityLines = (lines) => {
+  const now = [];
+  const upcoming = [];
+  const unavailable = [];
+
+  (lines || []).forEach((line) => {
+    const tier = line.tier ?? getAvailabilityTier(line.days);
+    if (tier === 0) now.push(line);
+    else if (tier === 1) upcoming.push(line);
+    else unavailable.push(line);
+  });
+
+  const byName = (a, b) =>
+    String(a.productName || '').localeCompare(String(b.productName || ''));
+
+  now.sort(byName);
+  upcoming.sort((a, b) => Number(a.days) - Number(b.days) || byName(a, b));
+  unavailable.sort(byName);
+
+  return [...now, ...upcoming, ...unavailable];
+};
+
+/** Short badge text for table UI */
+export const formatAvailabilityBadge = (days) => {
+  if (days === null || days === undefined) return 'Not available';
+  if (days === 0) return 'Avail now';
+  if (days === 1) return 'Avail in 1 day';
+  return `Avail in ${days} days`;
+};
+
+/**
+ * One line per farmer product: days until available (weight-adjusted), no product name.
+ */
+export const buildFarmerAvailabilityLines = (items, productList = [], productById = {}) => {
+  const availabilityItems = Array.isArray(items) ? items : [];
+  const products = Array.isArray(productList) ? productList : [];
+
+  if (!products.length) {
+    const dayValues = [];
+    availabilityItems.forEach((item) => {
+      const weightKg = parseProductWeightKg(item.vegetable_name, null);
+      const days = getAvailabilityDaysFromRecord(item, weightKg);
+      if (days !== null) dayValues.push(days);
+    });
+    if (!dayValues.length) return { lines: [], searchTerms: [] };
+    const minDays = Math.min(...dayValues);
+    const vegName = availabilityItems[0]?.vegetable_name || 'Vegetable';
+    const fallbackLines = [
+      {
+        productName: vegName,
+        days: minDays,
+        tier: getAvailabilityTier(minDays),
+        label: formatAvailabilityDaysLabel(minDays),
+        badge: formatAvailabilityBadge(minDays),
+      },
+    ];
+    return {
+      lines: sortAvailabilityLines(fallbackLines),
+      searchTerms: availabilityItems.map((i) => i.vegetable_name).filter(Boolean),
+    };
+  }
+
+  const lines = [];
+  const searchTerms = [];
+
+  products.forEach((product) => {
+    const name = product.product_name || '';
+    const catalog = productById[product.product_id] || productById[product.pid];
+    const weightKg = parseProductWeightKg(name, catalog?.net_weight);
+
+    const matches = availabilityItems.filter(
+      (item) =>
+        item.status === 'Available' &&
+        productsMatchForFarmerFilter(name, item.vegetable_name)
+    );
+
+    matches.forEach((m) => searchTerms.push(m.vegetable_name));
+
+    if (!matches.length) {
+      lines.push({
+        productName: name,
+        days: null,
+        tier: 2,
+        label: 'Not available',
+        badge: 'Not available',
+        weightKg,
+      });
+      return;
+    }
+
+    let bestDays = null;
+    matches.forEach((item) => {
+      const days = getAvailabilityDaysFromRecord(item, weightKg);
+      if (days === null) return;
+      if (bestDays === null || days < bestDays) bestDays = days;
+    });
+
+    const days = bestDays === null ? null : bestDays;
+    lines.push({
+      productName: name,
+      days,
+      tier: getAvailabilityTier(days),
+      label: formatAvailabilityDaysLabel(days),
+      badge: formatAvailabilityBadge(days),
+      weightKg,
+    });
+  });
+
+  return {
+    lines: sortAvailabilityLines(lines),
+    searchTerms: [...new Set(searchTerms)],
+  };
+};
+
+/** @deprecated Use buildFarmerAvailabilityLines — kept for any external imports */
+export const getAvailabilityInNextDays = (items, days = 5) => {
+  if (!items?.length || days < 1) return [];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today);
+  end.setDate(end.getDate() + days - 1);
+
+  const todayStr = toLocalDateString(today);
+  const endStr = toLocalDateString(end);
+
+  const names = new Set();
+  items.forEach((item) => {
+    if (item.status !== 'Available') return;
+    const from = normalizeDateStr(item.from_date);
+    const to = normalizeDateStr(item.to_date);
+    if (!from || !to) return;
+    if (from <= endStr && to >= todayStr) {
+      names.add(item.vegetable_name);
+    }
+  });
+
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
+};
+
+const toTitleCase = (value) => {
+  if (!value || typeof value !== 'string') return '—';
+  const trimmed = value.trim();
+  if (!trimmed) return '—';
+  return trimmed
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+const truncateLabel = (text, max = 22) => {
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+};
+
+const availabilityBadgeClass = (days) => {
+  if (days === 0) return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+  if (days === null || days === undefined) return 'bg-slate-100 text-slate-500 border-slate-200';
+  return 'bg-amber-50 text-amber-900 border-amber-200';
+};
+
+const normalizeForSearch = (value) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase();
+
+const fieldContainsQuery = (fieldValue, queryNorm) => {
+  const fieldNorm = normalizeForSearch(fieldValue);
+  return fieldNorm.length > 0 && fieldNorm.includes(queryNorm);
+};
+
+const farmerMatchesSearch = (farmer, query, availabilityMeta = {}) => {
+  const q = normalizeForSearch(query);
+  if (!q) return true;
+
+  const productList = Array.isArray(farmer.product_list) ? farmer.product_list : [];
+  const productHit = productList.some((p) => fieldContainsQuery(p.product_name, q));
+  const searchTerms = availabilityMeta.searchTerms || [];
+  const lineLabels = (availabilityMeta.lines || []).map((line) => line.label);
+  const lineProducts = (availabilityMeta.lines || []).map((line) => line.productName);
+  const availabilityHit =
+    searchTerms.some((name) => fieldContainsQuery(name, q)) ||
+    lineLabels.some((label) => fieldContainsQuery(label, q)) ||
+    lineProducts.some((name) => fieldContainsQuery(name, q));
+
+  return (
+    fieldContainsQuery(farmer.farmer_name, q) ||
+    fieldContainsQuery(farmer.registration_number, q) ||
+    fieldContainsQuery(farmer.phone, q) ||
+    fieldContainsQuery(farmer.email, q) ||
+    fieldContainsQuery(farmer.city, q) ||
+    fieldContainsQuery(farmer.state, q) ||
+    fieldContainsQuery(farmer.place, q) ||
+    productHit ||
+    availabilityHit
+  );
+};
 
 const Farmers = () => {
   const navigate = useNavigate();
@@ -34,6 +326,9 @@ const Farmers = () => {
   const [sortOrder, setSortOrder] = useState('recent');
   const itemsPerPage = 7;
   const [payoutStats, setPayoutStats] = useState(null);
+  const [availabilityByFarmer, setAvailabilityByFarmer] = useState({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [productById, setProductById] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -54,14 +349,17 @@ const Farmers = () => {
       try {
         const [farmersResponse, productsResponse] = await Promise.all([
           getAllFarmers(),
-          getAllProducts(1, 100)
+          fetchAllProducts()
         ]);
 
-        const products = productsResponse.data || [];
+        const products = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
         const productMap = {};
-        products.forEach(p => {
+        const byId = {};
+        products.forEach((p) => {
           productMap[p.pid] = p.product_name;
+          byId[p.pid] = p;
         });
+        setProductById(byId);
 
         const farmersData = (farmersResponse.data || []).map(farmer => {
           let productList = [];
@@ -93,15 +391,59 @@ const Farmers = () => {
   }, []);
 
   useEffect(() => {
+    if (!allFarmers.length) {
+      setAvailabilityByFarmer({});
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadAvailability = async () => {
+      setAvailabilityLoading(true);
+      const map = {};
+      const batchSize = 15;
+
+      for (let i = 0; i < allFarmers.length; i += batchSize) {
+        if (cancelled) return;
+        const batch = allFarmers.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (farmer) => {
+            try {
+              const response = await getVegetableAvailabilityByFarmer(farmer.fid);
+              const items = Array.isArray(response?.data) ? response.data : [];
+              map[farmer.fid] = buildFarmerAvailabilityLines(
+                items,
+                farmer.product_list,
+                productById
+              );
+            } catch {
+              map[farmer.fid] = { lines: [], searchTerms: [] };
+            }
+          })
+        );
+      }
+
+      if (!cancelled) {
+        setAvailabilityByFarmer(map);
+        setAvailabilityLoading(false);
+      }
+    };
+
+    loadAvailability();
+    return () => {
+      cancelled = true;
+    };
+  }, [allFarmers, productById]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortOrder]);
+
+  useEffect(() => {
     let filtered = [...allFarmers];
 
-    if (searchQuery) {
-      filtered = filtered.filter(farmer =>
-        farmer.farmer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        farmer.phone?.includes(searchQuery) ||
-        farmer.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        farmer.city?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        farmer.state?.toLowerCase().includes(searchQuery.toLowerCase())
+    if (searchQuery.trim()) {
+      filtered = filtered.filter((farmer) =>
+        farmerMatchesSearch(farmer, searchQuery, availabilityByFarmer[farmer.fid] || {})
       );
     }
 
@@ -115,7 +457,7 @@ const Farmers = () => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     setFarmers(filtered.slice(startIndex, endIndex));
-  }, [allFarmers, searchQuery, sortOrder, currentPage]);
+  }, [allFarmers, searchQuery, sortOrder, currentPage, availabilityByFarmer]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -308,7 +650,7 @@ const Farmers = () => {
           <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-[#6B8782]" size={20} />
           <input
             type="text"
-            placeholder="Search farmers by name, contact, or location..."
+            placeholder="Search by farmer, product, vegetable, contact, or location..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-12 pr-4 py-3 bg-[#F0F4F3] border-none rounded-xl text-[#0D5C4D] placeholder-[#6B8782] focus:outline-none focus:ring-2 focus:ring-[#0D8568]"
@@ -325,41 +667,80 @@ const Farmers = () => {
       </div>
 
       {/* Farmers Table */}
-      <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
+      <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB] shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-6 py-4 border-b border-[#D0E0DB] bg-[#FAFCFB]">
+          <div>
+            <h2 className="text-base font-semibold text-[#0D5C4D]">Farmer directory</h2>
+            <p className="text-xs text-[#6B8782] mt-0.5">
+              {loading ? 'Loading…' : `${allFarmers.length} farmers · vegetable availability`}
+            </p>
+            <p className="text-[10px] text-[#6B8782] mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" aria-hidden />
+                Avail now = available today
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-amber-400" aria-hidden />
+                Avail in X days = available after
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-slate-300" aria-hidden />
+                Not available
+              </span>
+            </p>
+          </div>
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[960px] border-collapse">
             <thead>
-              <tr className="bg-[#D4F4E8]">
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Farmer Name</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Product List</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Contact</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Place</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Action</th>
+              <tr className="bg-[#E8F5F0] border-b border-[#C5DDD4]">
+                <th className="px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F]">
+                  Farmer
+                </th>
+                <th className="px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F] min-w-[280px]">
+                  Products &amp; availability
+                </th>
+                <th className="px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F]">
+                  Contact
+                </th>
+                <th className="px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F]">
+                  Location
+                </th>
+                <th className="px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F]">
+                  Status
+                </th>
+                <th className="px-5 py-3.5 text-right text-[11px] font-semibold uppercase tracking-wider text-[#3D6B5F] w-16">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-[#E8EFEC]">
               {loading ? (
                 <tr>
-                  <td colSpan="6" className="px-6 py-8 text-center text-[#6B8782]">
-                    Loading farmers...
+                  <td colSpan="6" className="px-6 py-16 text-center">
+                    <Loader2 className="w-8 h-8 text-[#0D7C66] animate-spin mx-auto mb-3" />
+                    <p className="text-sm text-[#6B8782]">Loading farmers…</p>
                   </td>
                 </tr>
               ) : farmers.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-6 py-8 text-center text-[#6B8782]">
-                    No farmers found
+                  <td colSpan="6" className="px-6 py-16 text-center text-sm text-[#6B8782]">
+                    No farmers match your search.
                   </td>
                 </tr>
-              ) : farmers.map((farmer, index) => (
+              ) : farmers.map((farmer) => {
+                const availSummary = availabilityByFarmer[farmer.fid] || { lines: [], searchTerms: [] };
+                const availLines = sortAvailabilityLines(availSummary.lines || []);
+                const isActive = farmer.status === 'active';
+
+                return (
                 <tr
                   key={farmer.fid}
-                  className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                    }`}
+                  className="bg-white hover:bg-[#F7FAF9] transition-colors"
                 >
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#B8F4D8] flex items-center justify-center text-[#0D5C4D] font-semibold text-sm overflow-hidden">
+                  <td className="px-5 py-4 align-middle">
+                    <div className="flex items-center gap-3 min-w-[200px]">
+                      <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[#B8F4D8] to-[#7DD3AE] flex items-center justify-center text-[#0D5C4D] font-semibold text-sm overflow-hidden ring-2 ring-white shadow-sm shrink-0">
                         {farmer.profile_image ? (
                           <img
                             src={`${BASE_URL}${farmer.profile_image}`}
@@ -369,76 +750,149 @@ const Farmers = () => {
                               e.target.style.display = 'none';
                             }}
                           />
-                        ) : null}
-                        {!farmer.profile_image && farmer.farmer_name?.substring(0, 2).toUpperCase()}
+                        ) : (
+                          <span>{farmer.farmer_name?.substring(0, 2).toUpperCase()}</span>
+                        )}
                       </div>
-                      <div>
-                        <div className="font-semibold text-[#0D5C4D]">{farmer.farmer_name}</div>
-                        <div className="text-xs text-[#6B8782]">ID: {farmer.registration_number || 'N/A'}</div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-[#0D5C4D] text-sm leading-snug">
+                          {toTitleCase(farmer.farmer_name)}
+                        </div>
+                        <div className="text-[11px] text-[#6B8782] font-mono mt-0.5">
+                          {farmer.registration_number || '—'}
+                        </div>
                       </div>
                     </div>
                   </td>
 
-                  <td className="px-6 py-4">
-                    <div className="flex flex-wrap gap-1.5">
-                      {Array.isArray(farmer.product_list) && farmer.product_list.length > 0 ? (
-                        <>
-                          {farmer.product_list.slice(0, 2).map((product, idx) => (
-                            <span
-                              key={idx}
-                              className="px-3 py-1.5 rounded-full text-xs font-medium bg-[#D4F4E8] text-[#047857]"
+                  <td className="px-5 py-4 align-middle">
+                    {availabilityLoading ? (
+                      <div className="flex items-center gap-2 text-xs text-[#6B8782] min-w-[240px]">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#0D7C66]" />
+                        Loading…
+                      </div>
+                    ) : availLines.length > 0 ? (
+                      <div className="min-w-[240px] max-w-[320px]">
+                        <div className="hide-scrollbar flex flex-col gap-1.5 mb-2 max-h-[calc(2.5*2.25rem+0.5625rem)] overflow-y-auto overscroll-contain">
+                          {availLines.map((line, idx) => (
+                            <div
+                              key={`${line.productName || 'p'}-${idx}`}
+                              className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-[#FAFCFB] border border-[#E8EFEC] px-2"
+                              title={`${line.productName || 'Product'} — ${line.label}`}
                             >
-                              {product.product_name}
-                            </span>
+                              <span className="flex-1 min-w-0 text-[11px] font-medium text-[#065F46] truncate">
+                                {truncateLabel(line.productName || 'Product', 28)}
+                              </span>
+                              <span
+                                className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap border ${availabilityBadgeClass(line.days)}`}
+                              >
+                                {line.badge ??
+                                  (line.days === 0
+                                    ? 'Avail now'
+                                    : line.days == null
+                                      ? 'Not available'
+                                      : `Avail in ${line.days} days`)}
+                              </span>
+                            </div>
                           ))}
-                          {farmer.product_list.length > 2 && (
-                            <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-[#0D7C66] text-white">
-                              +{farmer.product_list.length - 2}
-                            </span>
-                          )}
-                        </>
-                      ) : <span className="text-xs text-[#6B8782]">No products</span>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/farmers/${farmer.fid}/vegetable-availability`)}
+                          className="text-[11px] font-semibold text-[#0D7C66] hover:text-[#0a6354] hover:underline transition-colors"
+                        >
+                          Manage availability
+                        </button>
+                      </div>
+                    ) : Array.isArray(farmer.product_list) && farmer.product_list.length > 0 ? (
+                      <div className="min-w-[200px]">
+                        <p className="text-xs text-[#6B8782] mb-2">
+                          {farmer.product_list.length} product{farmer.product_list.length !== 1 ? 's' : ''} — no
+                          availability set
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/farmers/${farmer.fid}/vegetable-availability`)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-[#0D7C66] bg-[#EEF7F3] border border-[#C5E8D8] hover:bg-[#D4F4E8] transition-colors"
+                        >
+                          Add availability
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="min-w-[160px]">
+                        <span className="text-xs text-[#9CA3AF] italic">No products assigned</span>
+                      </div>
+                    )}
+                  </td>
+
+                  <td className="px-5 py-4 align-middle">
+                    <div className="space-y-1.5 text-sm min-w-[140px]">
+                      {farmer.phone ? (
+                        <div className="flex items-center gap-2 text-[#0D5C4D]">
+                          <Phone className="w-3.5 h-3.5 text-[#6B8782] shrink-0" />
+                          <span>{farmer.phone}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-[#9CA3AF]">—</span>
+                      )}
+                      {farmer.email ? (
+                        <div className="flex items-center gap-2 text-[#6B8782] text-xs">
+                          <Mail className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate max-w-[180px]" title={farmer.email}>
+                            {farmer.email}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                   </td>
 
-                  <td className="px-6 py-4">
-                    <div className="text-sm text-[#0D5C4D]">{farmer.phone}</div>
-                    <div className="text-xs text-[#6B8782]">{farmer.email}</div>
+                  <td className="px-5 py-4 align-middle">
+                    <div className="flex items-center gap-2 text-sm text-[#0D5C4D] min-w-[100px]">
+                      <MapPin className="w-3.5 h-3.5 text-[#6B8782] shrink-0" />
+                      <span>{toTitleCase(farmer.place || farmer.city)}</span>
+                    </div>
                   </td>
 
-                  <td className="px-6 py-4">
-                    <div className="text-sm text-[#0D5C4D]">{farmer.place}</div>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    <span className={`px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 w-fit ${farmer.status === 'active' ? 'bg-[#4ED39A] text-white' : 'bg-red-500 text-white'
-                      }`}>
-                      <div className="w-2 h-2 rounded-full bg-white"></div>
-                      {farmer.status === 'active' ? 'Active' : 'Inactive'}
+                  <td className="px-5 py-4 align-middle">
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold ${
+                        isActive
+                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                          : 'bg-red-50 text-red-700 border border-red-200'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-red-500'}`}
+                      />
+                      {isActive ? 'Active' : 'Inactive'}
                     </span>
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4 align-middle text-right">
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleDropdown(farmer.fid, e);
                       }}
-                      className="text-[#6B8782] hover:text-[#0D5C4D] transition-colors p-1 hover:bg-[#F0F4F3] rounded"
+                      className="inline-flex items-center justify-center w-9 h-9 text-[#6B8782] hover:text-[#0D5C4D] hover:bg-[#EEF7F3] border border-transparent hover:border-[#D0E0DB] rounded-lg transition-colors"
+                      aria-label="Open actions menu"
                     >
-                      <MoreVertical size={20} />
+                      <MoreVertical size={18} />
                     </button>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         </div>
 
-        {/* Pagination - truncated with ellipsis */}
-        <div className="flex items-center justify-between px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
+        {/* Pagination */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-6 py-4 bg-[#FAFCFB] border-t border-[#D0E0DB]">
           <div className="text-sm text-[#6B8782]">
-            Showing page {currentPage} of {totalPages}
+            Page <span className="font-medium text-[#0D5C4D]">{currentPage}</span> of{' '}
+            <span className="font-medium text-[#0D5C4D]">{totalPages}</span>
           </div>
           <div className="flex items-center gap-1">
             <button

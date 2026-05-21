@@ -10,6 +10,17 @@ import { getAdvancePaysByDriverId } from '../../../api/advancePayApi';
 import { getAllDriverRates } from '../../../api/driverRateApi';
 import { getDriverAttendanceHistory, getAttendanceOverview } from '../../../api/driverAttendanceApi';
 import { getPaidRecords, markAsPaid } from '../../../api/dailyPayoutsApi';
+import PayoutPagination from '../common/PayoutPagination';
+
+import { payoutTh, payoutTd, payoutTdNum, payoutTdKm, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
+import { DEFAULT_PAYOUT_PAGE_SIZE, calcPayoutTotalPages, getPayoutPageSlice } from '../../../components/admin/common/PayoutPagination';
+const getTotalDrivenKM = (startKM, endKM) => {
+  if (startKM == null || endKM == null) return null;
+  const start = Number(startKM);
+  const end = Number(endKM);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(end - start, 0);
+};
 
 const getStorageKey = (driverId) => (driverId ? `driver-daily-paid-${driverId}` : 'driver-daily-paid');
 
@@ -22,7 +33,7 @@ const DailyPayout = () => {
   const [driver, setDriver] = useState(null);
   const [payoutData, setPayoutData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 7;
+  const itemsPerPage = DEFAULT_PAYOUT_PAGE_SIZE;
   const [paidDates, setPaidDates] = useState(new Set());
   const [markingPaid, setMarkingPaid] = useState(false);
   const [editExcessModal, setEditExcessModal] = useState({
@@ -590,12 +601,6 @@ const DailyPayout = () => {
     }
   };
 
-  const getStatusColor = (status) => {
-    return status === 'Paid'
-      ? 'bg-emerald-100 text-emerald-700'
-      : 'bg-yellow-100 text-yellow-700';
-  };
-
   const formatNum = (n) =>
     Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '0';
 
@@ -603,11 +608,8 @@ const DailyPayout = () => {
     .filter((p) => p.status === 'Pending')
     .reduce((sum, p) => sum + p.totalPayout, 0);
 
-  const totalPages = Math.max(1, Math.ceil(payoutData.length / itemsPerPage));
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedData = payoutData.slice(startIndex, startIndex + itemsPerPage);
-  const startItem = payoutData.length === 0 ? 0 : startIndex + 1;
-  const endItem = Math.min(startIndex + itemsPerPage, payoutData.length);
+  const totalPages = calcPayoutTotalPages(payoutData.length, itemsPerPage);
+  const paginatedData = getPayoutPageSlice(payoutData, currentPage, itemsPerPage);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-emerald-50 p-4 sm:p-6 lg:p-8">
@@ -634,124 +636,91 @@ const DailyPayout = () => {
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl overflow-hidden border border-[#D0E0DB]">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#D4F4E8]">
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Date</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Base Pay</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Fuel Expenses</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Start KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">End KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess KM</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Excess KM Price</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Advance Pay</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Total Payout</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-[#0D5C4D]">Action</th>
+        <div className={payoutTableWrap}>
+          <div className={payoutTableScroll}>
+            <table className={`${payoutTableBase} min-w-[1200px]`}>
+              <colgroup>
+                <col style={{ width: '8rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '4.5rem' }} />
+                <col style={{ width: '4.5rem' }} />
+                <col style={{ width: '4.5rem' }} />
+                <col style={{ width: '4.5rem' }} />
+                <col style={{ width: '9rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '5.5rem' }} />
+                <col style={{ width: '6rem' }} />
+              </colgroup>
+              <thead className={payoutThead}>
+                <tr>
+                  <th className={`${payoutTh} text-left`}>Date</th>
+                  <th className={`${payoutTh} text-right`}>Base Pay</th>
+                  <th className={`${payoutTh} text-right`}>Fuel</th>
+                  <th className={`${payoutTh} text-center`}>Start KM</th>
+                  <th className={`${payoutTh} text-center`}>End KM</th>
+                  <th className={`${payoutTh} text-center`}>Total KM</th>
+                  <th className={`${payoutTh} text-center`}>Excess KM</th>
+                  <th className={`${payoutTh} text-right`}>Excess Price</th>
+                  <th className={`${payoutTh} text-right`}>Advance</th>
+                  <th className={`${payoutTh} text-right`}>Total</th>
+                  <th className={`${payoutTh} text-center`}>Status</th>
+                  <th className={`${payoutTh} text-center`}>Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={payoutTbody}>
                 {loading ? (
-                  <tr>
-                    <td colSpan="11" className="px-6 py-8 text-center text-[#6B8782]">
-                      Loading daily payouts...
-                    </td>
-                  </tr>
+                  <tr><td colSpan={12} className={payoutEmptyCell}>Loading daily payouts...</td></tr>
                 ) : payoutData.length === 0 ? (
-                  <tr>
-                    <td colSpan="11" className="px-6 py-8 text-center text-[#6B8782]">
-                      No payout data for this driver yet.
-                    </td>
-                  </tr>
+                  <tr><td colSpan={12} className={payoutEmptyCell}>No payout data for this driver yet.</td></tr>
                 ) : (
                   paginatedData.map((payout, index) => (
-                    <tr
-                      key={payout.date}
-                      className={`border-b border-[#D0E0DB] hover:bg-[#F0F4F3] transition-colors ${
-                        index % 2 === 0 ? 'bg-white' : 'bg-[#F0F4F3]/30'
-                      }`}
-                    >
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-[#0D5C4D] text-sm">
-                          {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
-                        </div>
+                    <tr key={payout.date} className={payoutRow(index)}>
+                      <td className={`${payoutTd} whitespace-nowrap font-semibold`}>
+                        {new Date(payout.date + 'T12:00:00').toLocaleDateString('en-GB')}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">₹{formatNum(payout.basePay)}</div>
+                      <td className={payoutTdNum}>₹{formatNum(payout.basePay)}</td>
+                      <td className={`${payoutTdNum} text-red-600`}>-₹{formatNum(payout.fuelExpenses)}</td>
+                      <td className={payoutTdKm}>
+                        {payout.startKM != null ? formatNum(payout.startKM) : '—'}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-green-600 text-sm">
-                          -₹{formatNum(payout.fuelExpenses)}
-                        </div>
+                      <td className={payoutTdKm}>
+                        {payout.endKM != null ? formatNum(payout.endKM) : '—'}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">
-                          {payout.startKM != null ? `${formatNum(payout.startKM)} km` : '—'}
-                        </div>
+                      <td className={payoutTdKm}>
+                        {getTotalDrivenKM(payout.startKM, payout.endKM) != null
+                          ? formatNum(getTotalDrivenKM(payout.startKM, payout.endKM))
+                          : '—'}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">
-                          {payout.endKM != null ? `${formatNum(payout.endKM)} km` : '—'}
-                        </div>
+                      <td className={payoutTdKm}>
+                        {payout.excessKM != null && payout.excessKM > 0 ? formatNum(payout.excessKM) : '—'}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-[#0D5C4D] text-sm">
-                          {payout.excessKM != null && payout.excessKM > 0
-                            ? `${formatNum(payout.excessKM)} km`
-                            : '—'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-green-600 text-sm">
+                      <td className={payoutTd}>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-sm text-green-600 tabular-nums whitespace-nowrap">
                             {payout.excessKM && payout.unitPrice && !payout.excessKMRecordId
-                              ? `+${formatNum(payout.excessKM)} km × ₹${formatNum(
-                                  payout.unitPrice
-                                )} = ₹${formatNum(payout.excessKMPrice || 0)}`
+                              ? `+₹${formatNum(payout.excessKMPrice || 0)}`
                               : `+₹${formatNum(payout.excessKMPrice || 0)}`}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => openEditExcessPrice(payout)}
-                            className="px-2 py-1 text-xs font-medium text-[#0D5C4D] border border-[#0D5C4D] rounded hover:bg-[#D4F4E8] transition-colors"
-                          >
-                            Edit
-                          </button>
+                          <button type="button" onClick={() => openEditExcessPrice(payout)} className={payoutBtn.ghost}>Edit</button>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-red-600 text-sm">
-                          -₹{formatNum(payout.advancePay)}
+                      <td className={`${payoutTdNum} text-red-600`}>-₹{formatNum(payout.advancePay)}</td>
+                      <td className={`${payoutTdNum} font-bold`}>₹{formatNum(payout.totalPayout)}</td>
+                      <td className={payoutTdCenter}>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>{payout.status}</span>
+                      </td>
+                      <td className={payoutTdCenter}>
+                        <div className={payoutActionRow}>
+                          {payout.status === 'Pending' ? (
+                            <button type="button" onClick={() => handlePay(payout)} disabled={markingPaid} className={payoutBtn.pay}>
+                              {markingPaid ? '…' : 'Pay'}
+                            </button>
+                          ) : (
+                            <span className="text-xs text-[#6B8782] font-medium">Paid</span>
+                          )}
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-[#0D5C4D] text-sm">
-                          ₹{formatNum(payout.totalPayout)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span
-                          className={`px-3 py-1.5 rounded-full text-xs font-medium ${getStatusColor(
-                            payout.status
-                          )}`}
-                        >
-                          {payout.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        {payout.status === 'Pending' ? (
-                          <button
-                            onClick={() => handlePay(payout)}
-                            disabled={markingPaid}
-                            className="px-4 py-2 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors disabled:opacity-50"
-                          >
-                            {markingPaid ? 'Saving...' : 'Pay'}
-                          </button>
-                        ) : (
-                          <span className="text-xs text-gray-500 font-medium">Paid</span>
-                        )}
                       </td>
                     </tr>
                   ))
@@ -760,43 +729,26 @@ const DailyPayout = () => {
             </table>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 bg-[#F0F4F3] border-t border-[#D0E0DB]">
-            <div className="text-sm text-[#6B8782]">
-              Showing {startItem}–{endItem} of {payoutData.length} days
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-[#6B8782] px-2">
-                Page {currentPage} of {totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium text-[#0D5C4D] bg-white border border-[#D0E0DB] hover:bg-[#D4F4E8] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="text-sm font-semibold text-[#0D5C4D]">
-              Total Pending:{' '}
-              <span className="text-[#0D7C66]">₹{formatNum(totalPending)}</span>
-            </div>
-          </div>
+          <PayoutPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={payoutData.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onClampPage={setCurrentPage}
+            itemLabel="days"
+          >
+            <span className="font-semibold text-[#0D5C4D]">
+              Total Pending: <span className="text-[#0D7C66]">₹{formatNum(totalPending)}</span>
+            </span>
+          </PayoutPagination>
         </div>
 
         {/* Edit Excess KM Price Modal */}
         {editExcessModal.open && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="px-5 py-3.5 border-b border-gray-200 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-gray-900">
                   {editExcessModal.recordId ? 'Edit' : 'Set'} Excess KM Price
                 </h2>
@@ -836,7 +788,7 @@ const DailyPayout = () => {
                   />
                 </div>
               </div>
-              <div className="px-6 py-4 border-t border-gray-200 flex gap-3 justify-end">
+              <div className="px-5 py-3.5 border-t border-gray-200 flex gap-3 justify-end">
                 <button
                   type="button"
                   onClick={closeEditExcessModal}
