@@ -7,7 +7,7 @@ import { getAllLabours } from '../../../api/labourApi';
 import { getAllLabourRates } from '../../../api/labourRateApi';
 import { getAllLabourExcessPay } from '../../../api/labourExcessPayApi';
 import { getAllAttendance, getAttendanceByLabourId } from '../../../api/labourAttendanceApi';
-import { getPaidRecords, markAsPaid } from '../../../api/dailyPayoutsApi';
+import { getPaidRecords, markAsPaid, markPartialPaid, unmarkAsPaid } from '../../../api/dailyPayoutsApi';
 import PayoutPagination from '../common/PayoutPagination';
 
 import { payoutTh, payoutTd, payoutTdNum, payoutTdCenter, payoutBtn, payoutTableWrap, payoutTableScroll, payoutTableBase, payoutThead, payoutTbody, payoutRow, payoutEmptyCell, payoutActionRow, getPayoutStatusClassName } from '../../../components/admin/common/PayoutFilterBar';
@@ -35,7 +35,10 @@ const LabourDailyPayout = () => {
   const [payoutData, setPayoutData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [, setPaidKeys] = useState(new Set());
-  const [markingPaid, setMarkingPaid] = useState(false);
+  const [processingKey, setProcessingKey] = useState('');
+  const [partialModal, setPartialModal] = useState({ open: false, payout: null });
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialNote, setPartialNote] = useState('');
 
   useEffect(() => {
     fetchLabourDailyPayouts();
@@ -156,11 +159,15 @@ const LabourDailyPayout = () => {
       }
 
       let paidSet = new Set();
+      const paidMap = new Map();
       try {
         const paidList = paidRes?.data ?? paidRes?.paidRecords ?? paidRes?.records ?? (Array.isArray(paidRes) ? paidRes : []);
         paidList.forEach((item) => {
           const key = item?.reference_key ?? item?.key ?? (item?.date && (item?.entity_id ?? labourId) ? `${item.date}_${item.entity_id ?? labourId}` : (typeof item === 'string' ? item : null));
-          if (key) paidSet.add(key);
+          if (key) {
+            paidSet.add(key);
+            paidMap.set(key, item);
+          }
         });
         // Fallback: merge with localStorage so paid status persists if backend doesn't return records
         const storageKey = getStorageKey(labourId);
@@ -177,6 +184,20 @@ const LabourDailyPayout = () => {
         // ignore
       }
 
+      const resolvePaymentStatus = (key) => {
+        const paymentRecord = paidMap.get(key);
+        const paymentStatus = String(paymentRecord?.payment_status || '').toLowerCase();
+        const partialPaidAmount =
+          parseFloat(
+            paymentRecord?.row_data?.partialPaidAmount ??
+              paymentRecord?.row_data?.partial_amount ??
+              paymentRecord?.partial_amount ??
+              0
+          ) || 0;
+        const status = paymentStatus === 'partial' ? 'Partial' : paidSet.has(key) ? 'Paid' : 'Pending';
+        return { status, partialPaidAmount };
+      };
+
       let rows = Object.entries(rowKeyToWage).map(([key]) => {
         const labourId = rowKeyToLabourId[key] || '';
         const labourName = rowKeyToLabourName[key] || labourId;
@@ -184,7 +205,7 @@ const LabourDailyPayout = () => {
         const workType = (labour?.work_type || 'Normal').trim();
         const workload = workType === 'Heavy' ? 'Heavy' : workType === 'Light' ? 'Light' : 'Normal';
         const dailyWage = (ratesMap[workType] ?? ratesMap['Normal'] ?? parseFloat(labour?.daily_wage)) || 0;
-        const status = paidSet.has(key) ? 'Paid' : 'Pending';
+        const { status, partialPaidAmount } = resolvePaymentStatus(key);
         const [date] = key.split('_');
         return {
           key,
@@ -195,7 +216,8 @@ const LabourDailyPayout = () => {
           dailyWage,
           excessPay: 0,
           totalPayout: dailyWage,
-          status
+          status,
+          partialPaidAmount,
         };
       });
 
@@ -222,6 +244,7 @@ const LabourDailyPayout = () => {
             if (!rows.some((r) => r.date === dateStr)) {
               const key = `${dateStr}_${labourId}`;
               const excess = excessByDateAndLabour[key] ?? 0;
+              const { status, partialPaidAmount } = resolvePaymentStatus(key);
               rows.push({
                 key,
                 date: dateStr,
@@ -231,7 +254,8 @@ const LabourDailyPayout = () => {
                 dailyWage: dailyWageFromRate,
                 excessPay: excess,
                 totalPayout: dailyWageFromRate + excess,
-                status: paidSet.has(key) ? 'Paid' : 'Pending'
+                status,
+                partialPaidAmount,
               });
             }
           });
@@ -256,13 +280,20 @@ const LabourDailyPayout = () => {
     }
   };
 
+  const getBalanceAmount = (payout) => {
+    const total = Number(payout?.totalPayout || 0);
+    const paid = Number(payout?.partialPaidAmount || 0);
+    return Math.max(0, total - paid);
+  };
+
   const handlePay = async (payout) => {
     const key = payout.key;
     try {
-      setMarkingPaid(true);
+      setProcessingKey(key);
       const rowData = {
-        entity_id: labourId,
+        entity_id: labourId || payout.labourId,
         key: payout.key,
+        reference_key: payout.key,
         date: payout.date,
         labourId: payout.labourId,
         labourName: payout.labourName,
@@ -270,13 +301,15 @@ const LabourDailyPayout = () => {
         dailyWage: payout.dailyWage,
         excessPay: payout.excessPay,
         totalPayout: payout.totalPayout,
-        amount: Number(payout.totalPayout) || 0, // for DB amount column
+        amount: Number(payout.totalPayout) || 0,
         status: 'Paid',
-        ...payout
+        ...payout,
       };
       await markAsPaid('labour', rowData);
       setPaidKeys((prev) => new Set([...prev, key]));
-      setPayoutData((prev) => prev.map((p) => (p.key === key ? { ...p, status: 'Paid' } : p)));
+      setPayoutData((prev) =>
+        prev.map((p) => (p.key === key ? { ...p, status: 'Paid', partialPaidAmount: 0 } : p))
+      );
       // Persist to localStorage so status survives refresh (in case backend doesn't return paid records)
       try {
         const storageKey = getStorageKey(labourId);
@@ -291,7 +324,9 @@ const LabourDailyPayout = () => {
       console.error('Error marking labour payout as paid:', error);
       // Still persist locally so status survives refresh even if backend fails
       setPaidKeys((prev) => new Set([...prev, key]));
-      setPayoutData((prev) => prev.map((p) => (p.key === key ? { ...p, status: 'Paid' } : p)));
+      setPayoutData((prev) =>
+        prev.map((p) => (p.key === key ? { ...p, status: 'Paid', partialPaidAmount: 0 } : p))
+      );
       try {
         const storageKey = getStorageKey(labourId);
         const stored = localStorage.getItem(storageKey);
@@ -303,7 +338,98 @@ const LabourDailyPayout = () => {
       }
       alert(error?.message || error?.error || 'Could not save to server. Status saved locally and will persist after refresh.');
     } finally {
-      setMarkingPaid(false);
+      setProcessingKey('');
+    }
+  };
+
+  const handleRevert = async (payout) => {
+    const key = payout.key;
+    try {
+      setProcessingKey(key);
+      const rowData = {
+        key: payout.key,
+        id: payout.key,
+        reference_key: payout.key,
+        entity_id: labourId || payout.labourId,
+        date: payout.date,
+      };
+      await unmarkAsPaid('labour', rowData);
+      setPaidKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setPayoutData((prev) =>
+        prev.map((p) => (p.key === key ? { ...p, status: 'Pending', partialPaidAmount: 0 } : p))
+      );
+      try {
+        const storageKey = getStorageKey(labourId);
+        const stored = localStorage.getItem(storageKey);
+        const list = stored ? JSON.parse(stored) : [];
+        localStorage.setItem(storageKey, JSON.stringify(list.filter((k) => k !== key)));
+      } catch {
+        // ignore
+      }
+    } catch (error) {
+      console.error('Error reverting labour daily payout:', error);
+      alert(error?.message || error?.error || 'Failed to revert paid status');
+    } finally {
+      setProcessingKey('');
+    }
+  };
+
+  const openPartialPaymentModal = (payout) => {
+    setPartialAmount('');
+    setPartialNote('');
+    setPartialModal({ open: true, payout });
+  };
+
+  const closePartialPaymentModal = () => {
+    setPartialModal({ open: false, payout: null });
+    setPartialAmount('');
+    setPartialNote('');
+  };
+
+  const handlePartialPay = async () => {
+    if (!partialModal.payout) return;
+    const payout = partialModal.payout;
+    const entered = Number(partialAmount);
+    const alreadyPaid = Number(payout.partialPaidAmount || 0);
+    const total = Number(payout.totalPayout || 0);
+    if (!Number.isFinite(entered) || entered <= 0) return alert('Enter a valid partial amount');
+    const cumulative = alreadyPaid + entered;
+    if (total > 0 && cumulative >= total) {
+      return alert('Total partial paid must be less than total payout');
+    }
+    try {
+      setProcessingKey(payout.key);
+      await markPartialPaid('labour', {
+        key: payout.key,
+        id: payout.key,
+        reference_key: payout.key,
+        entity_id: labourId || payout.labourId,
+        date: payout.date,
+        amount: total,
+        partial_amount: entered,
+        partial_paid_total: cumulative,
+        note: partialNote,
+        labourId: payout.labourId,
+        labourName: payout.labourName,
+        workload: payout.workload,
+        dailyWage: payout.dailyWage,
+        excessPay: payout.excessPay,
+        totalPayout: payout.totalPayout,
+      });
+      setPayoutData((prev) =>
+        prev.map((p) =>
+          p.key === payout.key ? { ...p, status: 'Partial', partialPaidAmount: cumulative } : p
+        )
+      );
+      closePartialPaymentModal();
+    } catch (error) {
+      alert(error?.message || error?.error || 'Failed to save partial payment');
+    } finally {
+      setProcessingKey('');
     }
   };
 
@@ -317,8 +443,8 @@ const LabourDailyPayout = () => {
     Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '0';
 
   const totalPending = payoutData
-    .filter((p) => p.status === 'Pending')
-    .reduce((sum, p) => sum + p.totalPayout, 0);
+    .filter((p) => p.status !== 'Paid')
+    .reduce((sum, p) => sum + getBalanceAmount(p), 0);
 
   const totalPages = calcPayoutTotalPages(payoutData.length, ITEMS_PER_PAGE);
   const paginatedData = getPayoutPageSlice(payoutData, currentPage, ITEMS_PER_PAGE);
@@ -392,15 +518,48 @@ const LabourDailyPayout = () => {
                       <td className={`${payoutTdNum} font-bold`}>₹{formatNum(payout.totalPayout)}</td>
                       <td className={payoutTdCenter}>
                         <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${getPayoutStatusClassName(payout.status)}`}>{payout.status}</span>
+                        {payout.status === 'Partial' && (
+                          <div className="mt-1 text-[10px] text-[#6B8782] leading-tight">
+                            Paid ₹{formatNum(payout.partialPaidAmount || 0)}
+                            <br />
+                            Bal ₹{formatNum(getBalanceAmount(payout))}
+                          </div>
+                        )}
                       </td>
-                      <td className={payoutTdCenter}>
+                      <td className={`${payoutTdCenter} whitespace-nowrap`}>
                         <div className={payoutActionRow}>
-                          {payout.status === 'Pending' ? (
-                            <button type="button" onClick={() => handlePay(payout)} disabled={markingPaid} className={payoutBtn.pay}>
-                              {markingPaid ? '…' : 'Pay'}
+                          {payout.status === 'Paid' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRevert(payout)}
+                              disabled={processingKey === payout.key}
+                              className={payoutBtn.revert}
+                            >
+                              {processingKey === payout.key ? '…' : 'Revert'}
                             </button>
                           ) : (
-                            <span className="text-xs text-[#6B8782] font-medium">Paid</span>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openPartialPaymentModal(payout)}
+                                disabled={processingKey === payout.key}
+                                className={payoutBtn.partial}
+                              >
+                                Partial
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePay(payout)}
+                                disabled={processingKey === payout.key}
+                                className={payoutBtn.pay}
+                              >
+                                {processingKey === payout.key
+                                  ? '…'
+                                  : payout.status === 'Partial'
+                                    ? `Pay Bal ₹${formatNum(getBalanceAmount(payout))}`
+                                    : 'Pay'}
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -426,6 +585,54 @@ const LabourDailyPayout = () => {
           </PayoutPagination>
         </div>
       </div>
+
+      {partialModal.open && partialModal.payout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md bg-white rounded-xl shadow-xl p-5">
+            <h3 className="text-lg font-semibold text-[#0D5C4D] mb-1">Partial Payment</h3>
+            <p className="text-sm text-[#6B8782] mb-4">
+              {partialModal.payout.labourName} — {new Date(partialModal.payout.date + 'T12:00:00').toLocaleDateString('en-GB')} — Total ₹
+              {formatNum(partialModal.payout.totalPayout)}
+            </p>
+            {Number(partialModal.payout.partialPaidAmount || 0) > 0 && (
+              <p className="text-xs text-[#0D5C4D] mb-3">
+                Paid: ₹{formatNum(partialModal.payout.partialPaidAmount || 0)} | Balance: ₹
+                {formatNum(getBalanceAmount(partialModal.payout))}
+              </p>
+            )}
+            <div className="space-y-3">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={partialAmount}
+                onChange={(e) => setPartialAmount(e.target.value)}
+                placeholder="Partial amount"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+              />
+              <textarea
+                value={partialNote}
+                onChange={(e) => setPartialNote(e.target.value)}
+                placeholder="Note (optional)"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm min-h-[84px]"
+              />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={closePartialPaymentModal} className="px-4 py-2 border rounded-lg text-sm">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handlePartialPay}
+                disabled={processingKey === partialModal.payout.key}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"
+              >
+                {processingKey === partialModal.payout.key ? 'Saving...' : 'Save Partial'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
