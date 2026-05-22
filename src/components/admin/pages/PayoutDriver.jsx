@@ -169,6 +169,8 @@ const DriverPayoutManagement = () => {
       const fuelByDriverByDate = {};
       const fuelUnitPriceByDriverByDate = {};
       fuelExpenses.forEach(expense => {
+        if ((expense.payment_status || 'unpaid') === 'paid') return;
+
         const driverId = String(expense.driver_id ?? expense.did ?? expense.driver?.did ?? '');
         if (!driverId) return;
         const dateStr = toDateStr(expense.date || expense.expense_date);

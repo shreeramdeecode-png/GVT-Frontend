@@ -57,8 +57,9 @@ const ReportDriver = () => {
       );
 
       // Get all fuel expenses for this driver
-      const driverFuelExpenses = fuelExpenses.filter(expense => 
-        String(expense.driver_id || expense.did || expense.driver?.did || '') === driverId
+      const driverFuelExpenses = fuelExpenses.filter(expense =>
+        String(expense.driver_id || expense.did || expense.driver?.did || '') === driverId &&
+        (expense.payment_status || 'unpaid') !== 'paid'
       );
 
       // Calculate totals

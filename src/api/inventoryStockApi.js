@@ -12,6 +12,11 @@ export const getAllInventoryStocks = async () => {
   return response.data;
 };
 
+export const getInventoryStocksByCompany = async (companyId) => {
+  const response = await api.get(`${API_BASE_URL}/by-company/${companyId}`);
+  return response.data;
+};
+
 export const getInventoryStockById = async (id) => {
   const response = await api.get(`${API_BASE_URL}/${id}`);
   return response.data;

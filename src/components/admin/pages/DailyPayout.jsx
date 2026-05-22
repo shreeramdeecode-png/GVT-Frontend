@@ -146,6 +146,8 @@ const DailyPayout = () => {
       };
 
       fuelList.forEach((expense) => {
+        if ((expense.payment_status || 'unpaid') === 'paid') return;
+
         const dateStr = toDateStr(expense.date || expense.expense_date);
         if (!dateStr) return;
         const unitPrice = parseFloat(expense.unit_price ?? expense.unitPrice ?? 0) || 0;

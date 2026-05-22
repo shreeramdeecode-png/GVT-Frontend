@@ -1,7 +1,84 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { petrolBulkApi } from '../../../api/petrolBulkApi';
+import { getAllFuelExpenses, updateFuelExpense } from '../../../api/fuelExpenseApi';
+
+const isFuelPaid = (row) =>
+  String(row?.payment_status || 'unpaid').toLowerCase() === 'paid';
+
+const getExpenseRowId = (row) =>
+  Number(row?.id ?? row?.fuel_expense_id ?? row?.fuelexpense_id);
+
+const filterExpensesByDate = (expenses, fromDate, toDate) => {
+  return expenses.filter((expense) => {
+    const expenseDate = expense.date || '';
+    if (fromDate && expenseDate < fromDate) return false;
+    if (toDate && expenseDate > toDate) return false;
+    return true;
+  });
+};
+
+const summarizeExpenses = (expenses) => {
+  const totalAmount = expenses.reduce(
+    (sum, row) => sum + parseFloat(row.total_amount || 0),
+    0
+  );
+  const totalLitres = expenses.reduce(
+    (sum, row) => sum + parseFloat(row.litre || 0),
+    0
+  );
+  const unpaidExpenses = expenses.filter((row) => !isFuelPaid(row));
+  const paidExpenses = expenses.filter((row) => isFuelPaid(row));
+  const unpaidAmount = unpaidExpenses.reduce(
+    (sum, row) => sum + parseFloat(row.total_amount || 0),
+    0
+  );
+  const paidAmount = paidExpenses.reduce(
+    (sum, row) => sum + parseFloat(row.total_amount || 0),
+    0
+  );
+
+  return {
+    total_amount: totalAmount.toFixed(2),
+    total_litres: totalLitres.toFixed(2),
+    transaction_count: expenses.length,
+    unpaid_amount: unpaidAmount.toFixed(2),
+    unpaid_count: unpaidExpenses.length,
+    paid_amount: paidAmount.toFixed(2),
+    paid_count: paidExpenses.length
+  };
+};
+
+const loadFuelHistoryForBunk = async (bunk, fromDate = '', toDate = '') => {
+  const params = {};
+  if (fromDate) params.from_date = fromDate;
+  if (toDate) params.to_date = toDate;
+
+  try {
+    const response = await petrolBulkApi.getFuelHistory(bunk.pbid, params);
+    const payload = response.data?.data;
+    if (payload) return payload;
+  } catch {
+    // fallback when fuel-history route is unavailable
+  }
+
+  const allResponse = await getAllFuelExpenses();
+  const allExpenses = allResponse?.data || [];
+  const bunkName = (bunk.name || '').trim().toLowerCase();
+  const matched = allExpenses.filter(
+    (expense) =>
+      Number(expense.pbid) === Number(bunk.pbid) ||
+      (expense.petrol_bunk_name || '').trim().toLowerCase() === bunkName
+  );
+  const fuelExpenses = filterExpensesByDate(matched, fromDate, toDate);
+
+  return {
+    bunk,
+    fuelExpenses,
+    summary: summarizeExpenses(fuelExpenses)
+  };
+};
 
 const PetrolBunkManagement = () => {
   const navigate = useNavigate();
@@ -18,6 +95,16 @@ const PetrolBunkManagement = () => {
   const [loading, setLoading] = useState(false);
   const itemsPerPage = 7;
   const [formData, setFormData] = useState({ name: '', location: '', status: 'Active' });
+  const [viewingHistory, setViewingHistory] = useState(null);
+  const [fuelHistory, setFuelHistory] = useState([]);
+  const [historySummary, setHistorySummary] = useState(null);
+  const [allTimeSummary, setAllTimeSummary] = useState(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [dateFilterActive, setDateFilterActive] = useState(false);
+  const [payingFuel, setPayingFuel] = useState(false);
+  const [revertingFuel, setRevertingFuel] = useState(false);
 
   useEffect(() => {
     fetchPetrolBunks();
@@ -82,14 +169,223 @@ const PetrolBunkManagement = () => {
     }
   };
 
+  const refreshFuelHistory = useCallback(async (bunk, startDate, endDate) => {
+    const result = await loadFuelHistoryForBunk(bunk, startDate, endDate);
+    if (result?.bunk) setViewingHistory(result.bunk);
+    setFuelHistory(result?.fuelExpenses || []);
+    setHistorySummary(result?.summary || null);
+    if (!startDate && !endDate) {
+      setAllTimeSummary(result?.summary || null);
+    }
+    return result;
+  }, []);
+
+  const handleViewHistory = async (bunk) => {
+    setViewingHistory(bunk);
+    setFromDate('');
+    setToDate('');
+    setDateFilterActive(false);
+    setLoadingHistory(true);
+    setFuelHistory([]);
+    setHistorySummary(null);
+
+    try {
+      await refreshFuelHistory(bunk, '', '');
+    } catch (error) {
+      console.error('Error fetching fuel history:', error);
+      alert(error?.message || 'Failed to fetch fuel history');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleApplyDateFilter = async () => {
+    if (!viewingHistory) return;
+    if (fromDate && toDate && fromDate > toDate) {
+      alert('From date cannot be after end date');
+      return;
+    }
+
+    setLoadingHistory(true);
+    try {
+      await refreshFuelHistory(viewingHistory, fromDate, toDate);
+      setDateFilterActive(Boolean(fromDate || toDate));
+    } catch (error) {
+      console.error('Error filtering fuel history:', error);
+      alert(error?.message || 'Failed to filter fuel history');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const applyFuelPaymentUpdate = async ({
+    mode,
+    rowsInView,
+    apiCall,
+    fallbackStatus,
+    setBusy
+  }) => {
+    if (!viewingHistory) return;
+
+    const count = rowsInView.length;
+    const amount = rowsInView
+      .reduce((sum, row) => sum + parseFloat(row.total_amount || 0), 0)
+      .toFixed(2);
+
+    if (count === 0) {
+      alert(
+        mode === 'pay'
+          ? 'No unpaid fuel expenses in the selected date range'
+          : 'No paid fuel expenses to revert in the selected date range'
+      );
+      return;
+    }
+
+    const dateLabel =
+      fromDate || toDate
+        ? ` from ${fromDate || 'start'} to ${toDate || 'end'}`
+        : '';
+
+    const confirmMsg =
+      mode === 'pay'
+        ? `Mark ${count} transaction(s) as paid for ₹${amount}${dateLabel}?`
+        : `Revert ${count} paid transaction(s) (₹${amount}) back to unpaid${dateLabel}?`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setBusy(true);
+    try {
+      const expenseIds = rowsInView
+        .map((row) => getExpenseRowId(row))
+        .filter((id) => !Number.isNaN(id));
+
+      const payload = { expense_ids: expenseIds };
+      if (fromDate) payload.from_date = fromDate;
+      if (toDate) payload.to_date = toDate;
+
+      const bunkId = viewingHistory.pbid ?? viewingHistory.id;
+
+      const applyRowsFallback = async () => {
+        await Promise.all(
+          rowsInView.map((expense) => {
+            const id = getExpenseRowId(expense);
+            if (Number.isNaN(id)) return Promise.resolve();
+            return updateFuelExpense(id, { payment_status: fallbackStatus });
+          })
+        );
+        await refreshFuelHistory(viewingHistory, fromDate, toDate);
+        alert(`${rowsInView.length} transaction(s) updated`);
+      };
+
+      const applyResult = async (resBody) => {
+        const data = resBody?.data;
+        const updatedCount = data?.updated_count ?? rowsInView.length;
+
+        if (data?.fuelExpenses) {
+          if (data.bunk) setViewingHistory(data.bunk);
+          setFuelHistory(data.fuelExpenses);
+          setHistorySummary(data.summary || null);
+          if (!fromDate && !toDate) setAllTimeSummary(data.summary || null);
+        } else {
+          await refreshFuelHistory(viewingHistory, fromDate, toDate);
+        }
+        alert(resBody?.message || `${updatedCount} transaction(s) updated`);
+      };
+
+      try {
+        const response = await apiCall(bunkId, payload);
+        const resBody = response.data;
+        const updatedCount = resBody?.data?.updated_count ?? 0;
+
+        if (updatedCount === 0) {
+          await applyRowsFallback();
+          return;
+        }
+
+        await applyResult(resBody);
+      } catch (apiError) {
+        const status = apiError.response?.status;
+        if (status !== 404 && status !== 405) {
+          throw apiError;
+        }
+
+        await applyRowsFallback();
+      }
+    } catch (error) {
+      console.error(`Error updating fuel payment (${mode}):`, error);
+      const msg =
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        (typeof error === 'string' ? error : error.message) ||
+        'Failed to update payment status';
+      alert(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePayNow = () => {
+    const unpaidInView = fuelHistory.filter((row) => !isFuelPaid(row));
+    return applyFuelPaymentUpdate({
+      mode: 'pay',
+      rowsInView: unpaidInView,
+      apiCall: petrolBulkApi.markFuelPaid,
+      fallbackStatus: 'paid',
+      setBusy: setPayingFuel
+    });
+  };
+
+  const handleRevertPayment = () => {
+    const paidInView = fuelHistory.filter((row) => isFuelPaid(row));
+    return applyFuelPaymentUpdate({
+      mode: 'revert',
+      rowsInView: paidInView,
+      apiCall: petrolBulkApi.revertFuelPaid,
+      fallbackStatus: 'unpaid',
+      setBusy: setRevertingFuel
+    });
+  };
+
+  const handleBackToList = () => {
+    setViewingHistory(null);
+    setFuelHistory([]);
+    setHistorySummary(null);
+    setAllTimeSummary(null);
+    setFromDate('');
+    setToDate('');
+    setDateFilterActive(false);
+  };
+
+  const filteredDisplaySummary = useMemo(() => {
+    const rowStats = summarizeExpenses(fuelHistory);
+    if (!historySummary) return rowStats;
+    return {
+      ...historySummary,
+      total_amount: rowStats.total_amount,
+      total_litres: rowStats.total_litres,
+      transaction_count: rowStats.transaction_count,
+      unpaid_amount: rowStats.unpaid_amount,
+      unpaid_count: rowStats.unpaid_count,
+      paid_amount: rowStats.paid_amount,
+      paid_count: rowStats.paid_count
+    };
+  }, [historySummary, fuelHistory]);
+
+  const paidInViewCount = useMemo(
+    () => fuelHistory.filter((row) => isFuelPaid(row)).length,
+    [fuelHistory]
+  );
+  const unpaidInViewCount = useMemo(
+    () => fuelHistory.filter((row) => !isFuelPaid(row)).length,
+    [fuelHistory]
+  );
+
   const totalPages = Math.ceil(totalItems / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Tabs */}
-      <div className="px-6 sm:px-8 py-4">
-        <div className="flex flex-wrap gap-2">
+  const settingsTabs = (
+    <div className="px-6 sm:px-8 py-4">
+      <div className="flex flex-wrap gap-2">
           <button 
             onClick={() => navigate('/settings')}
             className={`px-6 py-2.5 rounded-lg font-medium text-sm transition-colors ${
@@ -170,8 +466,206 @@ const PetrolBunkManagement = () => {
           >
             Payout Formulas
           </button> */}
+      </div>
+    </div>
+  );
+
+  if (viewingHistory) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        {settingsTabs}
+
+        <div className="px-4 sm:px-6 lg:px-8 py-6">
+          <button
+            onClick={handleBackToList}
+            className="mb-4 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors flex items-center gap-2"
+          >
+            ← Back to Petrol Bunks
+          </button>
+
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-1">{viewingHistory.name}</h2>
+            <p className="text-sm text-gray-600 mb-4">{viewingHistory.location}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mb-6">
+              <div>
+                <span className="text-gray-600">All-Time Fuel Amount: </span>
+                <span className="font-semibold text-gray-900">
+                  ₹{allTimeSummary?.total_amount || historySummary?.total_amount || '0.00'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">Total Litres: </span>
+                <span className="font-semibold text-emerald-700">
+                  {allTimeSummary?.total_litres || historySummary?.total_litres || '0.00'} L
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">Transactions: </span>
+                <span className="font-semibold text-gray-900">
+                  {allTimeSummary?.transaction_count ?? historySummary?.transaction_count ?? 0}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col lg:flex-row lg:items-end gap-4 pt-4 border-t border-gray-200">
+              <div className="flex flex-col sm:flex-row gap-3 flex-1">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">From Date</label>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  />
+                </div>
+                <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleApplyDateFilter}
+                    disabled={loadingHistory}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
+                  >
+                    Apply Filter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFromDate('');
+                      setToDate('');
+                      setDateFilterActive(false);
+                      if (viewingHistory) {
+                        setLoadingHistory(true);
+                        refreshFuelHistory(viewingHistory, '', '').finally(() =>
+                          setLoadingHistory(false)
+                        );
+                      }
+                    }}
+                    disabled={loadingHistory}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-3 lg:ml-auto">
+                {dateFilterActive && (
+                  <p className="text-sm text-gray-600 mr-1">
+                    Filtered Total:{' '}
+                    <span className="font-semibold text-gray-900">
+                      ₹{filteredDisplaySummary?.total_amount || '0.00'}
+                    </span>
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handlePayNow}
+                  disabled={
+                    payingFuel ||
+                    revertingFuel ||
+                    loadingHistory ||
+                    unpaidInViewCount === 0
+                  }
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {payingFuel ? 'Processing...' : 'Pay Now'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRevertPayment}
+                  disabled={
+                    payingFuel ||
+                    revertingFuel ||
+                    loadingHistory ||
+                    paidInViewCount === 0
+                  }
+                  className="px-5 py-2 border border-amber-500 text-amber-700 bg-amber-50 rounded-lg text-sm font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {revertingFuel ? 'Reverting...' : 'Revert Payment'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Date</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Driver</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Vehicle No</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Fuel Type</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Unit Price</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Litres</th>
+                    <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Total Amount</th>
+                    <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Payment</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {loadingHistory ? (
+                    <tr>
+                      <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
+                        Loading fuel history...
+                      </td>
+                    </tr>
+                  ) : fuelHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
+                        No fuel history found
+                      </td>
+                    </tr>
+                  ) : (
+                    fuelHistory.map((expense) => {
+                      const isPaid = isFuelPaid(expense);
+                      return (
+                        <tr key={getExpenseRowId(expense) || expense.date} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-6 py-4 text-sm text-gray-600">{expense.date || '-'}</td>
+                          <td className="px-6 py-4 text-sm text-gray-900">
+                            {expense.driver?.driver_name || '-'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {expense.vehicle_number || expense.driver?.vehicle_number || '-'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{expense.fuel_type || '-'}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">₹{expense.unit_price}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{expense.litre} L</td>
+                          <td className="px-6 py-4 text-sm text-gray-600 text-center">₹{expense.total_amount}</td>
+                          <td className="px-6 py-4 text-sm text-center">
+                            <span
+                              className={`inline-flex px-3 py-1 rounded-full text-xs font-medium ${
+                                isPaid
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-red-100 text-red-700'
+                              }`}
+                            >
+                              {isPaid ? 'Paid' : 'Unpaid'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {settingsTabs}
 
       {/* Main Content */}
       <div className="px-4 sm:px-6 lg:px-8 py-6">
@@ -218,19 +712,25 @@ const PetrolBunkManagement = () => {
         {/* Table */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col className="w-[28%]" />
+                <col className="w-[24%]" />
+                <col className="w-[18%]" />
+                <col className="w-[30%]" />
+              </colgroup>
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider align-middle">
                     Petrol Bunk Name
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider align-middle">
                     Location
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider align-middle">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider align-middle">
                     Action
                   </th>
                 </tr>
@@ -246,30 +746,41 @@ const PetrolBunkManagement = () => {
                   </tr>
                 ) : petrolBunks.map((bunk) => (
                   <tr key={bunk.pbid} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 text-sm text-gray-900">{bunk.name}</td>
-                    <td className="px-6 py-4 text-sm text-gray-900">{bunk.location}</td>
-                    <td className="px-6 py-4 text-sm">
-                      <span
-                        className={`inline-flex px-3 py-1 rounded-full text-xs font-medium ${
-                          bunk.status === 'Active'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-yellow-100 text-yellow-700'
-                        }`}
-                      >
-                        {bunk.status}
-                      </span>
+                    <td className="px-6 py-4 text-sm text-gray-900 align-middle">{bunk.name}</td>
+                    <td className="px-6 py-4 text-sm text-gray-900 align-middle">{bunk.location}</td>
+                    <td className="px-6 py-4 text-sm text-center align-middle">
+                      <div className="flex justify-center">
+                        <span
+                          className={`inline-flex px-3 py-1 rounded-full text-xs font-medium ${
+                            bunk.status === 'Active'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-yellow-100 text-yellow-700'
+                          }`}
+                        >
+                          {bunk.status}
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-sm">
-                      <div className="flex gap-2">
+                    <td className="px-6 py-4 text-sm text-center align-middle">
+                      <div className="flex items-center justify-center gap-2 flex-nowrap">
                         <button
+                          type="button"
+                          onClick={() => handleViewHistory(bunk)}
+                          className="px-2.5 py-1 h-7 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors whitespace-nowrap leading-none"
+                        >
+                          View History
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleEdit(bunk)}
-                          className="px-4 py-1.5 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
+                          className="px-2.5 py-1 h-7 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-xs font-medium whitespace-nowrap leading-none"
                         >
                           Edit
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleDelete(bunk.pbid, bunk.name)}
-                          className="px-4 py-1.5 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium"
+                          className="px-2.5 py-1 h-7 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors text-xs font-medium whitespace-nowrap leading-none"
                         >
                           Delete
                         </button>

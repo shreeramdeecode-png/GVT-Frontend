@@ -29,12 +29,23 @@ export const getCompanyById = async (id) => {
   }
 };
 
+export const getCompanyPurchaseHistory = async (id) => {
+  try {
+    const response = await api.get(`${API_BASE_URL}/${id}/purchase-history`);
+    return response.data;
+  } catch (error) {
+    const msg = error.response?.data?.message || error.message;
+    throw new Error(msg);
+  }
+};
+
 export const updateCompany = async (id, data) => {
   try {
     const response = await api.put(`${API_BASE_URL}/${id}`, data);
     return response.data;
   } catch (error) {
-    throw error.response?.data || error.message;
+    const msg = error.response?.data?.message || error.message;
+    throw new Error(msg);
   }
 };
 

@@ -1,7 +1,110 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import * as inventoryCompanyApi from '../../../api/inventoryCompanyApi';
-import { getAllInventoryStocks } from '../../../api/inventoryStockApi';
+import { getAllInventoryStocks, getInventoryStocksByCompany } from '../../../api/inventoryStockApi';
+
+const amountForInput = (value) => {
+    const num = parseFloat(value);
+    if (Number.isNaN(num) || num === 0) return '';
+    return Number.isInteger(num) ? String(num) : String(num);
+};
+
+const amountForDisplay = (value) => {
+    const num = parseFloat(value);
+    if (Number.isNaN(num) || num === 0) return '0';
+    return Number.isInteger(num)
+        ? num.toLocaleString('en-IN')
+        : num.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+};
+
+const parseAmountInput = (rawValue) => {
+    if (rawValue === '' || rawValue === null || rawValue === undefined) return 0;
+    const num = parseFloat(rawValue);
+    return Number.isNaN(num) ? NaN : num;
+};
+
+const normalizeStockItems = (stock) => {
+    let items = stock.items;
+    if (typeof items === 'string') {
+        try {
+            items = JSON.parse(items);
+        } catch {
+            items = [];
+        }
+    }
+    return {
+        ...stock,
+        items: Array.isArray(items) ? items : []
+    };
+};
+
+const loadStocksForCompany = async (company) => {
+    const companyId = company.id;
+    const companyName = (company.name || '').trim().toLowerCase();
+
+    try {
+        const res = await inventoryCompanyApi.getCompanyPurchaseHistory(companyId);
+        return (res?.data || []).map(normalizeStockItems);
+    } catch {
+        try {
+            const res = await getInventoryStocksByCompany(companyId);
+            return (res?.data || []).map(normalizeStockItems);
+        } catch {
+            const res = await getAllInventoryStocks();
+            return (res?.data || [])
+                .filter(
+                    (stock) =>
+                        Number(stock.company_id) === Number(companyId) ||
+                        (stock.company_name || '').trim().toLowerCase() === companyName
+                )
+                .map(normalizeStockItems);
+        }
+    }
+};
+
+const flattenPurchaseHistory = (stocks) => {
+    return (stocks || []).flatMap((stock) => {
+        const normalized = normalizeStockItems(stock);
+        const items = normalized.items;
+        if (items.length === 0) {
+            return [{
+                id: `${stock.id}-0`,
+                invoice_no: stock.invoice_no,
+                date: stock.date,
+                item_name: '-',
+                hsn_code: '-',
+                quantity: '-',
+                price_per_unit: '-',
+                total_with_gst: normalized.total_with_gst
+            }];
+        }
+        return items.map((item, index) => ({
+            id: `${stock.id}-${index}`,
+            invoice_no: normalized.invoice_no,
+            date: normalized.date,
+            item_name: item.item_name,
+            hsn_code: item.hsn_code,
+            quantity: item.quantity,
+            price_per_unit: item.price_per_unit,
+            total_with_gst: item.total_with_gst ?? normalized.total_with_gst
+        }));
+    });
+};
+
+const applyCompanyTotals = (company, paidAmount, outstandingPermission) => {
+    const total = parseFloat(company.total_amount) || 0;
+    const paid = paidAmount !== undefined ? paidAmount : parseFloat(company.paid_amount) || 0;
+    const outstanding = outstandingPermission !== undefined
+        ? outstandingPermission
+        : parseFloat(company.outstanding_permission) || 0;
+    const pending = Math.max(0, total + outstanding - paid);
+    return {
+        ...company,
+        paid_amount: paid,
+        outstanding_permission: outstanding,
+        pending_amount: pending.toFixed(2)
+    };
+};
 
 const InventoryCompany = () => {
     const navigate = useNavigate();
@@ -11,10 +114,12 @@ const InventoryCompany = () => {
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [selectedCompany, setSelectedCompany] = useState(null);
-    const [formData, setFormData] = useState({ name: '', paid_amount: '', payment_status: 'unpaid' });
+    const [formData, setFormData] = useState({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
     const [searchTerm, setSearchTerm] = useState('');
-    const [editingPaidAmount, setEditingPaidAmount] = useState(null);
-    const [paidAmountValue, setPaidAmountValue] = useState('');
+    const [paidInputs, setPaidInputs] = useState({});
+    const [outstandingInputs, setOutstandingInputs] = useState({});
+    const [savingPaidId, setSavingPaidId] = useState(null);
+    const [savingOutstandingId, setSavingOutstandingId] = useState(null);
     const [viewingHistory, setViewingHistory] = useState(null);
     const [purchaseHistory, setPurchaseHistory] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
@@ -22,6 +127,17 @@ const InventoryCompany = () => {
     useEffect(() => {
         fetchCompanies();
     }, []);
+
+    useEffect(() => {
+        const paidMap = {};
+        const outstandingMap = {};
+        companies.forEach((c) => {
+            paidMap[c.id] = amountForInput(c.paid_amount);
+            outstandingMap[c.id] = amountForInput(c.outstanding_permission);
+        });
+        setPaidInputs(paidMap);
+        setOutstandingInputs(outstandingMap);
+    }, [companies]);
 
     const fetchCompanies = async () => {
         try {
@@ -33,13 +149,22 @@ const InventoryCompany = () => {
         }
     };
 
+    const updateCompanyInList = (updatedCompany) => {
+        setCompanies((prev) =>
+            prev.map((c) => (c.id === updatedCompany.id ? { ...c, ...updatedCompany } : c))
+        );
+        if (viewingHistory?.id === updatedCompany.id) {
+            setViewingHistory((prev) => ({ ...prev, ...updatedCompany }));
+        }
+    };
+
     const handleAdd = async (e) => {
         e.preventDefault();
         if (formData.name.trim()) {
             try {
                 await inventoryCompanyApi.createCompany({ name: formData.name.trim() });
                 fetchCompanies();
-                setFormData({ name: '' });
+                setFormData({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
                 setIsAddModalOpen(false);
             } catch (error) {
                 console.error('Error creating company:', error);
@@ -52,7 +177,8 @@ const InventoryCompany = () => {
         setSelectedCompany(company);
         setFormData({
             name: company.name,
-            paid_amount: company.paid_amount || 0,
+            paid_amount: amountForInput(company.paid_amount),
+            outstanding_permission: amountForInput(company.outstanding_permission),
             payment_status: company.payment_status || 'unpaid'
         });
         setIsEditModalOpen(true);
@@ -62,13 +188,18 @@ const InventoryCompany = () => {
         e.preventDefault();
         if (formData.name.trim()) {
             try {
-                await inventoryCompanyApi.updateCompany(selectedCompany.id, {
+                const response = await inventoryCompanyApi.updateCompany(selectedCompany.id, {
                     name: formData.name.trim(),
                     paid_amount: parseFloat(formData.paid_amount) || 0,
+                    outstanding_permission: parseFloat(formData.outstanding_permission) || 0,
                     payment_status: formData.payment_status
                 });
-                fetchCompanies();
-                setFormData({ name: '', paid_amount: '', payment_status: 'unpaid' });
+                if (response?.data) {
+                    updateCompanyInList(response.data);
+                } else {
+                    fetchCompanies();
+                }
+                setFormData({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
                 setIsEditModalOpen(false);
                 setSelectedCompany(null);
             } catch (error) {
@@ -101,37 +232,102 @@ const InventoryCompany = () => {
         }
     };
 
-    const handlePaidAmountClick = (companyId, currentAmount) => {
-        setEditingPaidAmount(companyId);
-        setPaidAmountValue(currentAmount || 0);
-    };
+    const handlePaidAmountSave = async (companyId, rawValue, options = {}) => {
+        const company = companies.find((c) => c.id === companyId);
+        if (!company) return false;
 
-    const handlePaidAmountSave = async (companyId) => {
+        const paidAmount = parseAmountInput(rawValue);
+        if (Number.isNaN(paidAmount) || paidAmount < 0) {
+            if (!options.silent) alert('Please enter a valid paid amount');
+            return false;
+        }
+
+        if (parseFloat(company.paid_amount || 0) === paidAmount) return company;
+
+        setSavingPaidId(companyId);
         try {
-            await inventoryCompanyApi.updateCompany(companyId, { paid_amount: parseFloat(paidAmountValue) || 0 });
-            setEditingPaidAmount(null);
-            fetchCompanies();
+            const response = await inventoryCompanyApi.updateCompany(companyId, { paid_amount: paidAmount });
+            const updated = response?.data || applyCompanyTotals(company, paidAmount);
+            updateCompanyInList(updated);
+            setPaidInputs((prev) => ({ ...prev, [companyId]: amountForInput(updated.paid_amount ?? paidAmount) }));
+            return updated;
         } catch (error) {
             console.error('Error updating paid amount:', error);
-            alert('Failed to update paid amount');
+            if (!options.silent) alert(error?.message || 'Failed to update paid amount');
+            fetchCompanies();
+            return null;
+        } finally {
+            setSavingPaidId(null);
         }
     };
 
-    const handlePaidAmountCancel = () => {
-        setEditingPaidAmount(null);
-        setPaidAmountValue('');
+    const handleOutstandingSave = async (companyId, rawValue, options = {}) => {
+        const company = companies.find((c) => c.id === companyId);
+        if (!company) return false;
+
+        const outstandingPermission = parseAmountInput(rawValue);
+        if (Number.isNaN(outstandingPermission) || outstandingPermission < 0) {
+            if (!options.silent) alert('Please enter a valid outstanding permission amount');
+            return false;
+        }
+
+        if (parseFloat(company.outstanding_permission || 0) === outstandingPermission) return true;
+
+        setSavingOutstandingId(companyId);
+        try {
+            const response = await inventoryCompanyApi.updateCompany(companyId, {
+                outstanding_permission: outstandingPermission
+            });
+            const updated = response?.data || applyCompanyTotals(company, undefined, outstandingPermission);
+            updateCompanyInList(updated);
+            setOutstandingInputs((prev) => ({
+                ...prev,
+                [companyId]: amountForInput(updated.outstanding_permission ?? outstandingPermission)
+            }));
+            return true;
+        } catch (error) {
+            console.error('Error updating outstanding permission:', error);
+            if (!options.silent) alert(error?.message || 'Failed to update outstanding permission');
+            fetchCompanies();
+            return false;
+        } finally {
+            setSavingOutstandingId(null);
+        }
     };
 
     const handleViewHistory = async (company) => {
         setViewingHistory(company);
         setLoadingHistory(true);
+        setPurchaseHistory([]);
+
+        let companyForHistory = companies.find((c) => c.id === company.id) || company;
+
+        const paidDraft = paidInputs[company.id];
+        if (
+            paidDraft !== undefined &&
+            parseFloat(paidDraft || 0) !== parseFloat(companyForHistory.paid_amount || 0)
+        ) {
+            const savedCompany = await handlePaidAmountSave(company.id, paidDraft, { silent: true });
+            if (savedCompany) companyForHistory = savedCompany;
+        }
+
         try {
-            const response = await getAllInventoryStocks();
-            const filtered = response.data.filter(item => item.company_id === company.id);
-            setPurchaseHistory(filtered);
+            const companyResponse = await inventoryCompanyApi.getCompanyById(company.id);
+            if (companyResponse?.data) {
+                companyForHistory = companyResponse.data;
+                setViewingHistory(companyResponse.data);
+            }
+        } catch (error) {
+            console.warn('Could not refresh company totals:', error);
+            setViewingHistory(companyForHistory);
+        }
+
+        try {
+            const stocks = await loadStocksForCompany(companyForHistory);
+            setPurchaseHistory(flattenPurchaseHistory(stocks));
         } catch (error) {
             console.error('Error fetching purchase history:', error);
-            alert('Failed to fetch purchase history');
+            alert(error?.message || 'Failed to fetch purchase history');
         } finally {
             setLoadingHistory(false);
         }
@@ -145,6 +341,10 @@ const InventoryCompany = () => {
     const filteredCompanies = companies.filter(company =>
         company.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm]);
 
     const itemsPerPage = 7;
     const totalPages = Math.ceil(filteredCompanies.length / itemsPerPage);
@@ -164,14 +364,18 @@ const InventoryCompany = () => {
 
                     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                         <h2 className="text-xl font-semibold text-gray-900 mb-2">{viewingHistory.name}</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
                             <div>
                                 <span className="text-gray-600">Total Amount: </span>
                                 <span className="font-semibold text-gray-900">₹{viewingHistory.total_amount || 0}</span>
                             </div>
                             <div>
+                                <span className="text-gray-600">Outstanding Permission: </span>
+                                <span className="font-semibold text-amber-600">₹{amountForDisplay(viewingHistory.outstanding_permission)}</span>
+                            </div>
+                            <div>
                                 <span className="text-gray-600">Paid Amount: </span>
-                                <span className="font-semibold text-green-600">₹{viewingHistory.paid_amount || 0}</span>
+                                <span className="font-semibold text-green-600">₹{amountForDisplay(viewingHistory.paid_amount)}</span>
                             </div>
                             <div>
                                 <span className="text-gray-600">Pending Amount: </span>
@@ -185,36 +389,38 @@ const InventoryCompany = () => {
                             <table className="w-full">
                                 <thead className="bg-gray-50 border-b border-gray-200">
                                     <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Date</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Invoice No</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Product Name</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">HSN Code</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Quantity</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Price/Unit</th>
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Total Amount with GST</th>
+                                        <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Total Amount with GST</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200">
                                     {loadingHistory ? (
                                         <tr>
-                                            <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                                            <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
                                                 Loading purchase history...
                                             </td>
                                         </tr>
                                     ) : purchaseHistory.length === 0 ? (
                                         <tr>
-                                            <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                                            <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
                                                 No purchase history found
                                             </td>
                                         </tr>
                                     ) : (
                                         purchaseHistory.map((item) => (
                                             <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                                                <td className="px-6 py-4 text-sm text-gray-600">{item.date || '-'}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-900">{item.invoice_no || '-'}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-900">{item.item_name}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-600">{item.hsn_code || '-'}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-600">{item.quantity || '-'}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-600">₹{item.price_per_unit}</td>
-                                                <td className="px-6 py-4 text-sm text-gray-600">₹{item.total_with_gst}</td>
+                                                <td className="px-6 py-4 text-sm text-gray-600 text-center">₹{item.total_with_gst}</td>
                                             </tr>
                                         ))
                                     )}
@@ -357,9 +563,12 @@ const InventoryCompany = () => {
                                         Pending Amount
                                     </th>
                                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                        Payment Status
+                                        Outstanding Permission
                                     </th>
                                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                        Payment Status
+                                    </th>
+                                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[340px]">
                                         Action
                                     </th>
                                 </tr>
@@ -367,7 +576,7 @@ const InventoryCompany = () => {
                             <tbody className="divide-y divide-gray-200">
                                 {filteredCompanies.length === 0 ? (
                                     <tr>
-                                        <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                                        <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
                                             No companies found
                                         </td>
                                     </tr>
@@ -379,47 +588,85 @@ const InventoryCompany = () => {
                                                 ₹{company.total_amount || 0}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-green-600">
-                                                {editingPaidAmount === company.id ? (
-                                                    <div className="flex items-center gap-2">
-                                                        <input
-                                                            type="number"
-                                                            step="0.01"
-                                                            value={paidAmountValue}
-                                                            onChange={(e) => setPaidAmountValue(e.target.value)}
-                                                            className="w-24 px-2 py-1 border border-green-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
-                                                            autoFocus
-                                                            onKeyDown={(e) => {
-                                                                if (e.key === 'Enter') handlePaidAmountSave(company.id);
-                                                                if (e.key === 'Escape') handlePaidAmountCancel();
-                                                            }}
-                                                        />
-                                                        <button
-                                                            onClick={() => handlePaidAmountSave(company.id)}
-                                                            className="px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600"
-                                                        >
-                                                            ✓
-                                                        </button>
-                                                        <button
-                                                            onClick={handlePaidAmountCancel}
-                                                            className="px-2 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400"
-                                                        >
-                                                            ✕
-                                                        </button>
-                                                    </div>
-                                                ) : (
+                                                <div className="flex items-center gap-1">
                                                     <input
                                                         type="number"
                                                         step="0.01"
-                                                        value={company.paid_amount || 0}
-                                                        onClick={() => handlePaidAmountClick(company.id, company.paid_amount)}
-                                                        readOnly
-                                                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm cursor-pointer hover:border-green-500 focus:outline-none"
-                                                        title="Click to edit paid amount"
+                                                        min="0"
+                                                        value={paidInputs[company.id] ?? ''}
+                                                        placeholder="0"
+                                                        onChange={(e) =>
+                                                            setPaidInputs((prev) => ({
+                                                                ...prev,
+                                                                [company.id]: e.target.value
+                                                            }))
+                                                        }
+                                                        disabled={savingPaidId === company.id}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                handlePaidAmountSave(company.id, paidInputs[company.id]);
+                                                            }
+                                                        }}
+                                                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:opacity-60"
+                                                        title="Enter paid amount and click Save"
                                                     />
-                                                )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            handlePaidAmountSave(company.id, paidInputs[company.id])
+                                                        }
+                                                        disabled={savingPaidId === company.id}
+                                                        className="px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600 disabled:opacity-60"
+                                                    >
+                                                        Save
+                                                    </button>
+                                                </div>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-red-600">
                                                 ₹{company.pending_amount || 0}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-amber-600">
+                                                <div className="flex items-center gap-1">
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        min="0"
+                                                        value={outstandingInputs[company.id] ?? ''}
+                                                        placeholder="0"
+                                                        onChange={(e) =>
+                                                            setOutstandingInputs((prev) => ({
+                                                                ...prev,
+                                                                [company.id]: e.target.value
+                                                            }))
+                                                        }
+                                                        disabled={savingOutstandingId === company.id}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                handleOutstandingSave(
+                                                                    company.id,
+                                                                    outstandingInputs[company.id]
+                                                                );
+                                                            }
+                                                        }}
+                                                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 disabled:opacity-60"
+                                                        title="Enter outstanding permission and click Save"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            handleOutstandingSave(
+                                                                company.id,
+                                                                outstandingInputs[company.id]
+                                                            )
+                                                        }
+                                                        disabled={savingOutstandingId === company.id}
+                                                        className="px-2 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600 disabled:opacity-60"
+                                                    >
+                                                        Save
+                                                    </button>
+                                                </div>
                                             </td>
                                             <td className="px-6 py-4 text-sm">
                                                 <button
@@ -432,23 +679,26 @@ const InventoryCompany = () => {
                                                     {company.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
                                                 </button>
                                             </td>
-                                            <td className="px-6 py-4 text-sm">
-                                                <div className="flex items-center gap-2">
+                                            <td className="px-4 py-4 text-sm text-center min-w-[340px]">
+                                                <div className="inline-flex items-center justify-center gap-1.5 flex-nowrap">
                                                     <button
+                                                        type="button"
                                                         onClick={() => handleViewHistory(company)}
-                                                        className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors"
+                                                        className="shrink-0 px-2 py-1 h-7 bg-emerald-500 text-white rounded-lg text-xs font-medium hover:bg-emerald-600 transition-colors whitespace-nowrap leading-none"
                                                     >
                                                         View Purchase History
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => handleEdit(company)}
-                                                        className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
+                                                        className="shrink-0 px-2 py-1 h-7 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors whitespace-nowrap leading-none"
                                                     >
                                                         Edit
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => handleDelete(company.id)}
-                                                        className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200 transition-colors"
+                                                        className="shrink-0 px-2 py-1 h-7 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200 transition-colors whitespace-nowrap leading-none"
                                                     >
                                                         Delete
                                                     </button>
@@ -546,7 +796,7 @@ const InventoryCompany = () => {
                                     <input
                                         type="text"
                                         value={formData.name}
-                                        onChange={(e) => setFormData({ name: e.target.value })}
+                                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                         placeholder="Enter company name"
                                         className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                                         required
@@ -584,7 +834,7 @@ const InventoryCompany = () => {
                                     onClick={() => {
                                         setIsEditModalOpen(false);
                                         setSelectedCompany(null);
-                                        setFormData({ name: '' });
+                                        setFormData({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
                                     }}
                                     className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
                                 >
@@ -616,9 +866,22 @@ const InventoryCompany = () => {
                                         step="0.01"
                                         value={formData.paid_amount}
                                         onChange={(e) => setFormData({ ...formData, paid_amount: e.target.value })}
-                                        placeholder="Enter paid amount"
+                                        placeholder="Enter paid amount (leave empty for 0)"
                                         className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                                         required
+                                    />
+                                </div>
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Outstanding Permission
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={formData.outstanding_permission}
+                                        onChange={(e) => setFormData({ ...formData, outstanding_permission: e.target.value })}
+                                        placeholder="Enter amount (leave empty for 0)"
+                                        className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                                     />
                                 </div>
                                 <div className="mb-6">
@@ -641,7 +904,7 @@ const InventoryCompany = () => {
                                         onClick={() => {
                                             setIsEditModalOpen(false);
                                             setSelectedCompany(null);
-                                            setFormData({ name: '' });
+                                            setFormData({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
                                         }}
                                         className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
                                     >
