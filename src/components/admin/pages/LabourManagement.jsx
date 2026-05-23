@@ -209,7 +209,10 @@ const LabourManagement = () => {
   };
 
   const totalLabours = labours.length;
-  const activeLabours = labours.filter(l => l.status === 'Live').length;
+  const activeLabours = labours.filter((l) => {
+    const raw = String(l.status || '').trim().toLowerCase();
+    return raw === 'live' || raw === 'active';
+  }).length;
 
   const stats = [
     {

@@ -15,31 +15,72 @@ import { getAllProductCounts } from '../../../api/productCountApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
+
 /** Normalize order/availability product labels for farmer dropdown matching. */
 export const normalizeProductLabel = (name) => {
   if (!name) return '';
   let s = String(name).replace(/^\d+\s*-\s*/, '').trim();
   const paren = s.indexOf('(');
   if (paren > 0) s = s.slice(0, paren).trim();
-  return s.toLowerCase();
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
 };
 
 export const productsMatchForFarmerFilter = (orderProduct, availabilityName) => {
   const a = normalizeProductLabel(orderProduct);
   const b = normalizeProductLabel(availabilityName);
   if (!a || !b) return false;
-  return a === b || a.includes(b) || b.includes(a);
+  return a === b;
 };
 
-export const filterFarmersByProductAvailability = (farmers, farmerAvailability, productName) => {
-  if (!farmers?.length) return [];
+export const toDateOnly = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+};
+
+export const isAvailabilityActiveToday = (item, today = toDateOnly(new Date())) => {
+  if (!item || String(item.status || '').toLowerCase() !== 'available') return false;
+  const from = toDateOnly(item.from_date);
+  const to = toDateOnly(item.to_date);
+  if (!from || !to) return false;
+  return from <= today && to >= today;
+};
+
+export const filterActiveAvailabilityItems = (items) =>
+  (items || []).filter((item) => isAvailabilityActiveToday(item));
+
+export const getFarmerId = (farmer) => farmer?.fid ?? farmer?.id ?? farmer?.farmer_id;
+
+export const filterFarmersByProductAvailability = (
+  farmers,
+  farmerAvailability,
+  productName,
+  options = {}
+) => {
+  const { availabilityLoaded = true, includeFarmerIds = [] } = options;
+
+  if (!farmers?.length || !String(productName || '').trim()) return [];
+  if (!availabilityLoaded) return [];
+
+  const includeSet = new Set((includeFarmerIds || []).map((id) => String(id)));
+
   const withMatch = farmers.filter((farmer) => {
-    const availability = farmerAvailability[farmer.fid] || [];
+    const fid = getFarmerId(farmer);
+    const availability = farmerAvailability[fid] || [];
     return availability.some((item) =>
       productsMatchForFarmerFilter(productName, item.vegetable_name)
     );
   });
-  return withMatch.length > 0 ? withMatch : farmers;
+
+  if (includeSet.size === 0) return withMatch;
+
+  const matchedIds = new Set(withMatch.map((f) => String(getFarmerId(f))));
+  const extras = farmers.filter((farmer) => {
+    const fid = String(getFarmerId(farmer));
+    return includeSet.has(fid) && !matchedIds.has(fid);
+  });
+
+  return [...withMatch, ...extras];
 };
 
 const FlowerOrderAssignStage1 = () => {
@@ -63,6 +104,7 @@ const FlowerOrderAssignStage1 = () => {
   const [assignmentStatuses, setAssignmentStatuses] = useState({});
   const [availableStock, setAvailableStock] = useState({});
   const [farmerAvailability, setFarmerAvailability] = useState({});
+  const [farmerAvailabilityLoaded, setFarmerAvailabilityLoaded] = useState(false);
   const [isBoxBasedOrder, setIsBoxBasedOrder] = useState(false); // Track if order was created with boxes
   const [stage1Status, setStage1Status] = useState(null); // Store stage1_status from assignment data
   
@@ -88,31 +130,52 @@ const FlowerOrderAssignStage1 = () => {
   // Fetch farmer availability when farmers are loaded
   useEffect(() => {
     const fetchFarmerAvailability = async () => {
-      if (assignmentOptions.farmers.length === 0) return;
-
-      const availabilityMap = {};
-      const today = new Date().toISOString().split('T')[0];
-
-      for (const farmer of assignmentOptions.farmers) {
-        try {
-          const response = await getVegetableAvailabilityByFarmer(farmer.fid);
-          if (response.success && response.data) {
-            availabilityMap[farmer.fid] = response.data.filter(item => {
-              const fromDate = item.from_date;
-              const toDate = item.to_date;
-              return item.status === 'Available' && fromDate <= today && toDate >= today;
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching availability for farmer ${farmer.fid}:`, error);
-        }
+      if (assignmentOptions.farmers.length === 0) {
+        setFarmerAvailability({});
+        setFarmerAvailabilityLoaded(true);
+        return;
       }
 
+      setFarmerAvailabilityLoaded(false);
+      const availabilityMap = {};
+
+      await Promise.all(
+        assignmentOptions.farmers.map(async (farmer) => {
+          const fid = getFarmerId(farmer);
+          if (!fid) return;
+          try {
+            const response = await getVegetableAvailabilityByFarmer(fid);
+            if (response.success && response.data) {
+              availabilityMap[fid] = filterActiveAvailabilityItems(response.data);
+            } else {
+              availabilityMap[fid] = [];
+            }
+          } catch (error) {
+            console.error(`Error fetching availability for farmer ${fid}:`, error);
+            availabilityMap[fid] = [];
+          }
+        })
+      );
+
       setFarmerAvailability(availabilityMap);
+      setFarmerAvailabilityLoaded(true);
     };
 
     fetchFarmerAvailability();
   }, [assignmentOptions.farmers]);
+
+  const getFarmerFilterOptions = (row) => {
+    const assignedName = row.isRemaining
+      ? remainingRowAssignments[row.id]?.assignedTo
+      : row.assignedTo;
+    const assignedFarmer = assignedName
+      ? assignmentOptions.farmers.find((f) => f.farmer_name === assignedName)
+      : null;
+    return {
+      availabilityLoaded: farmerAvailabilityLoaded,
+      includeFarmerIds: assignedFarmer ? [getFarmerId(assignedFarmer)] : [],
+    };
+  };
 
   // Update isBoxBasedOrder when orderDetails changes
   useEffect(() => {
@@ -1186,8 +1249,16 @@ const FlowerOrderAssignStage1 = () => {
                         }}
                       >
                         <option value="">Select name...</option>
+                        {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                          <option value="" disabled>Loading farmers...</option>
+                        )}
                         {row.entityType === 'farmer' && sortDropdownObjects(
-                          filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                          filterFarmersByProductAvailability(
+                            assignmentOptions.farmers,
+                            farmerAvailability,
+                            productName,
+                            getFarmerFilterOptions(row)
+                          ),
                           (farmer) => farmer.farmer_name
                         ).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
@@ -1482,8 +1553,16 @@ const FlowerOrderAssignStage1 = () => {
                       }}
                     >
                       <option value="">Select name...</option>
+                      {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                        <option value="" disabled>Loading farmers...</option>
+                      )}
                       {row.entityType === 'farmer' && sortDropdownObjects(
-                        filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                        filterFarmersByProductAvailability(
+                          assignmentOptions.farmers,
+                          farmerAvailability,
+                          productName,
+                          getFarmerFilterOptions(row)
+                        ),
                         (farmer) => farmer.farmer_name
                       ).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>

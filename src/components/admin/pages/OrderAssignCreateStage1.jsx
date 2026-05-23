@@ -14,7 +14,11 @@ import { getAllProductCounts } from '../../../api/productCountApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
-import { filterFarmersByProductAvailability } from './FlowerOrderAssignStage1';
+import {
+  filterFarmersByProductAvailability,
+  filterActiveAvailabilityItems,
+  getFarmerId,
+} from './FlowerOrderAssignStage1';
 
 const OrderAssignCreateStage1 = () => {
   const navigate = useNavigate();
@@ -37,6 +41,7 @@ const OrderAssignCreateStage1 = () => {
   const [assignmentStatuses, setAssignmentStatuses] = useState({});
   const [availableStock, setAvailableStock] = useState({});
   const [farmerAvailability, setFarmerAvailability] = useState({});
+  const [farmerAvailabilityLoaded, setFarmerAvailabilityLoaded] = useState(false);
   const [isBoxBasedOrder, setIsBoxBasedOrder] = useState(false); // Track if order was created with boxes
   const [stage1Status, setStage1Status] = useState(null); // Store stage1_status from assignment data
   
@@ -62,31 +67,52 @@ const OrderAssignCreateStage1 = () => {
   // Fetch farmer availability when farmers are loaded
   useEffect(() => {
     const fetchFarmerAvailability = async () => {
-      if (assignmentOptions.farmers.length === 0) return;
-
-      const availabilityMap = {};
-      const today = new Date().toISOString().split('T')[0];
-
-      for (const farmer of assignmentOptions.farmers) {
-        try {
-          const response = await getVegetableAvailabilityByFarmer(farmer.fid);
-          if (response.success && response.data) {
-            availabilityMap[farmer.fid] = response.data.filter(item => {
-              const fromDate = item.from_date;
-              const toDate = item.to_date;
-              return item.status === 'Available' && fromDate <= today && toDate >= today;
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching availability for farmer ${farmer.fid}:`, error);
-        }
+      if (assignmentOptions.farmers.length === 0) {
+        setFarmerAvailability({});
+        setFarmerAvailabilityLoaded(true);
+        return;
       }
 
+      setFarmerAvailabilityLoaded(false);
+      const availabilityMap = {};
+
+      await Promise.all(
+        assignmentOptions.farmers.map(async (farmer) => {
+          const fid = getFarmerId(farmer);
+          if (!fid) return;
+          try {
+            const response = await getVegetableAvailabilityByFarmer(fid);
+            if (response.success && response.data) {
+              availabilityMap[fid] = filterActiveAvailabilityItems(response.data);
+            } else {
+              availabilityMap[fid] = [];
+            }
+          } catch (error) {
+            console.error(`Error fetching availability for farmer ${fid}:`, error);
+            availabilityMap[fid] = [];
+          }
+        })
+      );
+
       setFarmerAvailability(availabilityMap);
+      setFarmerAvailabilityLoaded(true);
     };
 
     fetchFarmerAvailability();
   }, [assignmentOptions.farmers]);
+
+  const getFarmerFilterOptions = (row) => {
+    const assignedName = row.isRemaining
+      ? remainingRowAssignments[row.id]?.assignedTo
+      : row.assignedTo;
+    const assignedFarmer = assignedName
+      ? assignmentOptions.farmers.find((f) => f.farmer_name === assignedName)
+      : null;
+    return {
+      availabilityLoaded: farmerAvailabilityLoaded,
+      includeFarmerIds: assignedFarmer ? [getFarmerId(assignedFarmer)] : [],
+    };
+  };
 
   // Update isBoxBasedOrder when orderDetails changes
   useEffect(() => {
@@ -1150,8 +1176,16 @@ const OrderAssignCreateStage1 = () => {
                         }}
                       >
                         <option value="">Select name...</option>
+                        {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                          <option value="" disabled>Loading farmers...</option>
+                        )}
                         {row.entityType === 'farmer' && sortDropdownObjects(
-                          filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                          filterFarmersByProductAvailability(
+                            assignmentOptions.farmers,
+                            farmerAvailability,
+                            productName,
+                            getFarmerFilterOptions(row)
+                          ),
                           (farmer) => farmer.farmer_name
                         ).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
@@ -1446,8 +1480,16 @@ const OrderAssignCreateStage1 = () => {
                       }}
                     >
                       <option value="">Select name...</option>
+                      {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                        <option value="" disabled>Loading farmers...</option>
+                      )}
                       {row.entityType === 'farmer' && sortDropdownObjects(
-                        filterFarmersByProductAvailability(assignmentOptions.farmers, farmerAvailability, productName),
+                        filterFarmersByProductAvailability(
+                          assignmentOptions.farmers,
+                          farmerAvailability,
+                          productName,
+                          getFarmerFilterOptions(row)
+                        ),
                         (farmer) => farmer.farmer_name
                       ).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>

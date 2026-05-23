@@ -58,10 +58,14 @@ const AddLabour = () => {
       const formDataToSend = new FormData();
       formDataToSend.append('full_name', formData.fullName);
       formDataToSend.append('mobile_number', formData.mobileNumber);
-      formDataToSend.append('aadhaar_number', formData.aadhaarNumber);
+      if (formData.aadhaarNumber) {
+        formDataToSend.append('aadhaar_number', formData.aadhaarNumber);
+      }
       formDataToSend.append('date_of_birth', formData.dateOfBirth);
       formDataToSend.append('gender', formData.gender.charAt(0).toUpperCase() + formData.gender.slice(1));
-      formDataToSend.append('blood_group', formData.bloodGroup);
+      if (formData.bloodGroup) {
+        formDataToSend.append('blood_group', formData.bloodGroup);
+      }
       formDataToSend.append('address', formData.address);
       formDataToSend.append('work_type', formData.workType);
       formDataToSend.append('department', formData.department);
@@ -70,7 +74,9 @@ const AddLabour = () => {
       if (formData.bankName) formDataToSend.append('bank_name', formData.bankName);
       if (formData.branchName) formDataToSend.append('branch_name', formData.branchName);
       if (formData.accountNumber) formDataToSend.append('account_number', formData.accountNumber);
-      if (formData.ifscCode) formDataToSend.append('IFSC_code', formData.ifscCode);
+      if (formData.ifscCode) {
+        formDataToSend.append('IFSC_code', formData.ifscCode.trim().toUpperCase());
+      }
       formDataToSend.append('status', formData.status);
       
       if (profileImage) formDataToSend.append('profile_image', profileImage);

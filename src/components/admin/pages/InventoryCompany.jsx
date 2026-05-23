@@ -1,7 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import * as inventoryCompanyApi from '../../../api/inventoryCompanyApi';
-import { getAllInventoryStocks, getInventoryStocksByCompany } from '../../../api/inventoryStockApi';
+import {
+    getAllInventoryStocks,
+    getInventoryStocksByCompany,
+    updateInventoryStockPaymentStatus
+} from '../../../api/inventoryStockApi';
+import HistoryPaymentFilterBar, { PaymentStatusBadge } from '../common/HistoryPaymentFilterBar';
+
+const isPurchasePaid = (row) =>
+    String(row?.payment_status || 'unpaid').toLowerCase() === 'paid';
+
+const getStockRowId = (row) => Number(row?.stock_id);
+
+const filterHistoryByDate = (rows, fromDate, toDate) =>
+    (rows || []).filter((row) => {
+        const rowDate = row.date || '';
+        if (fromDate && rowDate < fromDate) return false;
+        if (toDate && rowDate > toDate) return false;
+        return true;
+    });
+
+const summarizePurchaseRows = (rows) => {
+    const totalAmount = (rows || []).reduce(
+        (sum, row) => sum + parseFloat(row.total_with_gst || 0),
+        0
+    );
+    return { total_amount: totalAmount.toFixed(2) };
+};
 
 const amountForInput = (value) => {
     const num = parseFloat(value);
@@ -69,6 +95,8 @@ const flattenPurchaseHistory = (stocks) => {
         if (items.length === 0) {
             return [{
                 id: `${stock.id}-0`,
+                stock_id: stock.id,
+                payment_status: normalized.payment_status || 'unpaid',
                 invoice_no: stock.invoice_no,
                 date: stock.date,
                 item_name: '-',
@@ -80,6 +108,8 @@ const flattenPurchaseHistory = (stocks) => {
         }
         return items.map((item, index) => ({
             id: `${stock.id}-${index}`,
+            stock_id: stock.id,
+            payment_status: normalized.payment_status || 'unpaid',
             invoice_no: normalized.invoice_no,
             date: normalized.date,
             item_name: item.item_name,
@@ -117,11 +147,15 @@ const InventoryCompany = () => {
     const [formData, setFormData] = useState({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
     const [searchTerm, setSearchTerm] = useState('');
     const [paidInputs, setPaidInputs] = useState({});
-    const [outstandingInputs, setOutstandingInputs] = useState({});
     const [savingPaidId, setSavingPaidId] = useState(null);
-    const [savingOutstandingId, setSavingOutstandingId] = useState(null);
     const [viewingHistory, setViewingHistory] = useState(null);
+    const [allPurchaseHistory, setAllPurchaseHistory] = useState([]);
     const [purchaseHistory, setPurchaseHistory] = useState([]);
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
+    const [dateFilterActive, setDateFilterActive] = useState(false);
+    const [payingPurchase, setPayingPurchase] = useState(false);
+    const [revertingPurchase, setRevertingPurchase] = useState(false);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
     useEffect(() => {
@@ -130,13 +164,10 @@ const InventoryCompany = () => {
 
     useEffect(() => {
         const paidMap = {};
-        const outstandingMap = {};
         companies.forEach((c) => {
             paidMap[c.id] = amountForInput(c.paid_amount);
-            outstandingMap[c.id] = amountForInput(c.outstanding_permission);
         });
         setPaidInputs(paidMap);
-        setOutstandingInputs(outstandingMap);
     }, [companies]);
 
     const fetchCompanies = async () => {
@@ -162,7 +193,10 @@ const InventoryCompany = () => {
         e.preventDefault();
         if (formData.name.trim()) {
             try {
-                await inventoryCompanyApi.createCompany({ name: formData.name.trim() });
+                await inventoryCompanyApi.createCompany({
+                    name: formData.name.trim(),
+                    outstanding_permission: parseFloat(formData.outstanding_permission) || 0
+                });
                 fetchCompanies();
                 setFormData({ name: '', paid_amount: '', outstanding_permission: '', payment_status: 'unpaid' });
                 setIsAddModalOpen(false);
@@ -261,44 +295,14 @@ const InventoryCompany = () => {
         }
     };
 
-    const handleOutstandingSave = async (companyId, rawValue, options = {}) => {
-        const company = companies.find((c) => c.id === companyId);
-        if (!company) return false;
-
-        const outstandingPermission = parseAmountInput(rawValue);
-        if (Number.isNaN(outstandingPermission) || outstandingPermission < 0) {
-            if (!options.silent) alert('Please enter a valid outstanding permission amount');
-            return false;
-        }
-
-        if (parseFloat(company.outstanding_permission || 0) === outstandingPermission) return true;
-
-        setSavingOutstandingId(companyId);
-        try {
-            const response = await inventoryCompanyApi.updateCompany(companyId, {
-                outstanding_permission: outstandingPermission
-            });
-            const updated = response?.data || applyCompanyTotals(company, undefined, outstandingPermission);
-            updateCompanyInList(updated);
-            setOutstandingInputs((prev) => ({
-                ...prev,
-                [companyId]: amountForInput(updated.outstanding_permission ?? outstandingPermission)
-            }));
-            return true;
-        } catch (error) {
-            console.error('Error updating outstanding permission:', error);
-            if (!options.silent) alert(error?.message || 'Failed to update outstanding permission');
-            fetchCompanies();
-            return false;
-        } finally {
-            setSavingOutstandingId(null);
-        }
-    };
-
     const handleViewHistory = async (company) => {
         setViewingHistory(company);
         setLoadingHistory(true);
+        setAllPurchaseHistory([]);
         setPurchaseHistory([]);
+        setFromDate('');
+        setToDate('');
+        setDateFilterActive(false);
 
         let companyForHistory = companies.find((c) => c.id === company.id) || company;
 
@@ -324,7 +328,9 @@ const InventoryCompany = () => {
 
         try {
             const stocks = await loadStocksForCompany(companyForHistory);
-            setPurchaseHistory(flattenPurchaseHistory(stocks));
+            const flat = flattenPurchaseHistory(stocks);
+            setAllPurchaseHistory(flat);
+            setPurchaseHistory(flat);
         } catch (error) {
             console.error('Error fetching purchase history:', error);
             alert(error?.message || 'Failed to fetch purchase history');
@@ -335,7 +341,124 @@ const InventoryCompany = () => {
 
     const handleBackToList = () => {
         setViewingHistory(null);
+        setAllPurchaseHistory([]);
         setPurchaseHistory([]);
+        setFromDate('');
+        setToDate('');
+        setDateFilterActive(false);
+    };
+
+    const handleApplyDateFilter = () => {
+        if (fromDate && toDate && fromDate > toDate) {
+            alert('From date cannot be after end date');
+            return;
+        }
+        setPurchaseHistory(filterHistoryByDate(allPurchaseHistory, fromDate, toDate));
+        setDateFilterActive(Boolean(fromDate || toDate));
+    };
+
+    const handleClearDateFilter = () => {
+        setFromDate('');
+        setToDate('');
+        setDateFilterActive(false);
+        setPurchaseHistory(allPurchaseHistory);
+    };
+
+    const filteredDisplaySummary = useMemo(
+        () => summarizePurchaseRows(purchaseHistory),
+        [purchaseHistory]
+    );
+
+    const unpaidInViewCount = useMemo(
+        () => purchaseHistory.filter((row) => !isPurchasePaid(row)).length,
+        [purchaseHistory]
+    );
+
+    const paidInViewCount = useMemo(
+        () => purchaseHistory.filter((row) => isPurchasePaid(row)).length,
+        [purchaseHistory]
+    );
+
+    const applyPurchasePaymentUpdate = useCallback(
+        async ({ mode, rowsInView, fallbackStatus, setBusy }) => {
+            const uniqueStockIds = [
+                ...new Set(
+                    rowsInView
+                        .map((row) => getStockRowId(row))
+                        .filter((id) => !Number.isNaN(id))
+                )
+            ];
+
+            if (uniqueStockIds.length === 0) {
+                alert('No purchase records to update');
+                return;
+            }
+
+            const amount = rowsInView
+                .reduce((sum, row) => sum + parseFloat(row.total_with_gst || 0), 0)
+                .toFixed(2);
+
+            const dateLabel =
+                fromDate || toDate
+                    ? ` from ${fromDate || 'start'} to ${toDate || 'end'}`
+                    : '';
+
+            const confirmMsg =
+                mode === 'pay'
+                    ? `Mark ${uniqueStockIds.length} purchase(s) as paid for ₹${amount}${dateLabel}?`
+                    : `Revert ${uniqueStockIds.length} paid purchase(s) (₹${amount}) back to unpaid${dateLabel}?`;
+
+            if (!window.confirm(confirmMsg)) return;
+
+            setBusy(true);
+            try {
+                await Promise.all(
+                    uniqueStockIds.map((id) =>
+                        updateInventoryStockPaymentStatus(id, fallbackStatus)
+                    )
+                );
+                const stocks = await loadStocksForCompany(viewingHistory);
+                const flat = flattenPurchaseHistory(stocks);
+                setAllPurchaseHistory(flat);
+                setPurchaseHistory(
+                    dateFilterActive
+                        ? filterHistoryByDate(flat, fromDate, toDate)
+                        : flat
+                );
+                alert(`${uniqueStockIds.length} purchase(s) updated`);
+            } catch (error) {
+                console.error('Error updating purchase payment:', error);
+                const msg = error.message || 'Failed to update payment status';
+                alert(
+                    msg.includes('404')
+                        ? `${msg}\n\nRestart the backend (vsd_backend) and try again.`
+                        : msg
+                );
+            } finally {
+                setBusy(false);
+            }
+        },
+        [viewingHistory, fromDate, toDate, dateFilterActive]
+    );
+
+    const handlePayNow = () => {
+        const unpaidInView = purchaseHistory.filter((row) => !isPurchasePaid(row));
+        applyPurchasePaymentUpdate({
+            mode: 'pay',
+            rowsInView: unpaidInView,
+            fallbackStatus: 'paid',
+            setBusy: setPayingPurchase
+        });
+    };
+
+    const handleRevertPayment = () => {
+        const paidInView = purchaseHistory.filter((row) => isPurchasePaid(row));
+        applyPurchasePaymentUpdate({
+            mode: 'revert',
+            rowsInView: paidInView,
+            fallbackStatus: 'unpaid',
+            setBusy: setRevertingPurchase
+        });
     };
 
     const filteredCompanies = companies.filter(company =>
@@ -364,14 +487,10 @@ const InventoryCompany = () => {
 
                     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                         <h2 className="text-xl font-semibold text-gray-900 mb-2">{viewingHistory.name}</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mb-0">
                             <div>
                                 <span className="text-gray-600">Total Amount: </span>
                                 <span className="font-semibold text-gray-900">₹{viewingHistory.total_amount || 0}</span>
-                            </div>
-                            <div>
-                                <span className="text-gray-600">Outstanding Permission: </span>
-                                <span className="font-semibold text-amber-600">₹{amountForDisplay(viewingHistory.outstanding_permission)}</span>
                             </div>
                             <div>
                                 <span className="text-gray-600">Paid Amount: </span>
@@ -382,6 +501,24 @@ const InventoryCompany = () => {
                                 <span className="font-semibold text-red-600">₹{viewingHistory.pending_amount || 0}</span>
                             </div>
                         </div>
+
+                        <HistoryPaymentFilterBar
+                            fromDate={fromDate}
+                            toDate={toDate}
+                            onFromDateChange={setFromDate}
+                            onToDateChange={setToDate}
+                            onApplyFilter={handleApplyDateFilter}
+                            onClear={handleClearDateFilter}
+                            loading={loadingHistory}
+                            dateFilterActive={dateFilterActive}
+                            filteredTotal={filteredDisplaySummary?.total_amount || '0.00'}
+                            paying={payingPurchase}
+                            reverting={revertingPurchase}
+                            unpaidCount={unpaidInViewCount}
+                            paidCount={paidInViewCount}
+                            onPayNow={handlePayNow}
+                            onRevertPayment={handleRevertPayment}
+                        />
                     </div>
 
                     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -396,18 +533,19 @@ const InventoryCompany = () => {
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Quantity</th>
                                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Price/Unit</th>
                                         <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Total Amount with GST</th>
+                                        <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Payment</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200">
                                     {loadingHistory ? (
                                         <tr>
-                                            <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
+                                            <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
                                                 Loading purchase history...
                                             </td>
                                         </tr>
                                     ) : purchaseHistory.length === 0 ? (
                                         <tr>
-                                            <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
+                                            <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
                                                 No purchase history found
                                             </td>
                                         </tr>
@@ -421,6 +559,9 @@ const InventoryCompany = () => {
                                                 <td className="px-6 py-4 text-sm text-gray-600">{item.quantity || '-'}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-600">₹{item.price_per_unit}</td>
                                                 <td className="px-6 py-4 text-sm text-gray-600 text-center">₹{item.total_with_gst}</td>
+                                                <td className="px-6 py-4 text-sm text-center">
+                                                    <PaymentStatusBadge paid={isPurchasePaid(item)} />
+                                                </td>
                                             </tr>
                                         ))
                                     )}
@@ -626,47 +767,8 @@ const InventoryCompany = () => {
                                             <td className="px-6 py-4 text-sm text-red-600">
                                                 ₹{company.pending_amount || 0}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-amber-600">
-                                                <div className="flex items-center gap-1">
-                                                    <input
-                                                        type="number"
-                                                        step="0.01"
-                                                        min="0"
-                                                        value={outstandingInputs[company.id] ?? ''}
-                                                        placeholder="0"
-                                                        onChange={(e) =>
-                                                            setOutstandingInputs((prev) => ({
-                                                                ...prev,
-                                                                [company.id]: e.target.value
-                                                            }))
-                                                        }
-                                                        disabled={savingOutstandingId === company.id}
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter') {
-                                                                e.preventDefault();
-                                                                handleOutstandingSave(
-                                                                    company.id,
-                                                                    outstandingInputs[company.id]
-                                                                );
-                                                            }
-                                                        }}
-                                                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 disabled:opacity-60"
-                                                        title="Enter outstanding permission and click Save"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                            handleOutstandingSave(
-                                                                company.id,
-                                                                outstandingInputs[company.id]
-                                                            )
-                                                        }
-                                                        disabled={savingOutstandingId === company.id}
-                                                        className="px-2 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600 disabled:opacity-60"
-                                                    >
-                                                        Save
-                                                    </button>
-                                                </div>
+                                            <td className="px-6 py-4 text-sm text-amber-600 font-medium">
+                                                ₹{amountForDisplay(company.outstanding_permission)}
                                             </td>
                                             <td className="px-6 py-4 text-sm">
                                                 <button
@@ -789,7 +891,7 @@ const InventoryCompany = () => {
                                 </button>
                             </div>
                             <form onSubmit={handleAdd} className="p-6">
-                                <div className="mb-6">
+                                <div className="mb-4">
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
                                         Company Name <span className="text-red-500">*</span>
                                     </label>
@@ -801,6 +903,25 @@ const InventoryCompany = () => {
                                         className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                                         required
                                     />
+                                </div>
+                                <div className="mb-6">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Outstanding Permission
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={formData.outstanding_permission}
+                                        onChange={(e) =>
+                                            setFormData({ ...formData, outstanding_permission: e.target.value })
+                                        }
+                                        placeholder="Enter amount (added to pending)"
+                                        className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        This amount is included in the pending total for this company.
+                                    </p>
                                 </div>
                                 <div className="flex gap-3">
                                     <button

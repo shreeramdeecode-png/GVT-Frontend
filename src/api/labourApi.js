@@ -7,7 +7,13 @@ export const createLabour = async (labourData) => {
         });
         return response.data;
     } catch (error) {
-        throw error.response?.data || error.message;
+        const data = error.response?.data;
+        const message =
+            data?.message ||
+            data?.error ||
+            error.message ||
+            'Failed to create labour';
+        throw new Error(message);
     }
 };
 

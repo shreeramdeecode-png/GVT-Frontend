@@ -15,6 +15,11 @@ import { getAllProductCounts } from '../../../api/productCountApi';
 import { getAvailableStock } from '../../../api/orderAssignmentApi';
 import { getVegetableAvailabilityByFarmer } from '../../../api/vegetableAvailabilityApi';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
+import {
+  filterFarmersByProductAvailability,
+  filterActiveAvailabilityItems,
+  getFarmerId,
+} from './FlowerOrderAssignStage1';
 import { getLocalOrder, saveLocalOrder } from '../../../api/localOrderApi';
 
 const LocalOrderAssign = () => {
@@ -37,6 +42,7 @@ const LocalOrderAssign = () => {
   const [assignmentStatuses, setAssignmentStatuses] = useState({});
   const [availableStock, setAvailableStock] = useState({});
   const [farmerAvailability, setFarmerAvailability] = useState({});
+  const [farmerAvailabilityLoaded, setFarmerAvailabilityLoaded] = useState(false);
   const [isBoxBasedOrder, setIsBoxBasedOrder] = useState(false); // Track if order was created with boxes
   const [labourDropdownOpen, setLabourDropdownOpen] = useState({});
   const [labourDropdownPosition, setLabourDropdownPosition] = useState({});
@@ -121,31 +127,52 @@ const LocalOrderAssign = () => {
   // Fetch farmer availability when farmers are loaded
   useEffect(() => {
     const fetchFarmerAvailability = async () => {
-      if (assignmentOptions.farmers.length === 0) return;
-
-      const availabilityMap = {};
-      const today = new Date().toISOString().split('T')[0];
-
-      for (const farmer of assignmentOptions.farmers) {
-        try {
-          const response = await getVegetableAvailabilityByFarmer(farmer.fid);
-          if (response.success && response.data) {
-            availabilityMap[farmer.fid] = response.data.filter(item => {
-              const fromDate = item.from_date;
-              const toDate = item.to_date;
-              return item.status === 'Available' && fromDate <= today && toDate >= today;
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching availability for farmer ${farmer.fid}:`, error);
-        }
+      if (assignmentOptions.farmers.length === 0) {
+        setFarmerAvailability({});
+        setFarmerAvailabilityLoaded(true);
+        return;
       }
 
+      setFarmerAvailabilityLoaded(false);
+      const availabilityMap = {};
+
+      await Promise.all(
+        assignmentOptions.farmers.map(async (farmer) => {
+          const fid = getFarmerId(farmer);
+          if (!fid) return;
+          try {
+            const response = await getVegetableAvailabilityByFarmer(fid);
+            if (response.success && response.data) {
+              availabilityMap[fid] = filterActiveAvailabilityItems(response.data);
+            } else {
+              availabilityMap[fid] = [];
+            }
+          } catch (error) {
+            console.error(`Error fetching availability for farmer ${fid}:`, error);
+            availabilityMap[fid] = [];
+          }
+        })
+      );
+
       setFarmerAvailability(availabilityMap);
+      setFarmerAvailabilityLoaded(true);
     };
 
     fetchFarmerAvailability();
   }, [assignmentOptions.farmers]);
+
+  const getFarmerFilterOptions = (row) => {
+    const assignedName = row.isRemaining
+      ? remainingRowAssignments[row.id]?.assignedTo
+      : row.assignedTo;
+    const assignedFarmer = assignedName
+      ? assignmentOptions.farmers.find((f) => f.farmer_name === assignedName)
+      : null;
+    return {
+      availabilityLoaded: farmerAvailabilityLoaded,
+      includeFarmerIds: assignedFarmer ? [getFarmerId(assignedFarmer)] : [],
+    };
+  };
 
   // Local Order Assign is always net-weight based (no box-based UI)
   useEffect(() => {
@@ -1495,10 +1522,18 @@ const LocalOrderAssign = () => {
                         }}
                       >
                         <option value="">Select name...</option>
-                        {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
-                          const availability = farmerAvailability[farmer.fid] || [];
-                          return availability.some(item => item.vegetable_name === productName);
-                        }).map(farmer => (
+                        {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                          <option value="" disabled>Loading farmers...</option>
+                        )}
+                        {row.entityType === 'farmer' && sortDropdownObjects(
+                          filterFarmersByProductAvailability(
+                            assignmentOptions.farmers,
+                            farmerAvailability,
+                            productName,
+                            getFarmerFilterOptions(row)
+                          ),
+                          (farmer) => farmer.farmer_name
+                        ).map(farmer => (
                           <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                         ))}
                         {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (
@@ -1772,10 +1807,18 @@ const LocalOrderAssign = () => {
                       }}
                     >
                       <option value="">Select name...</option>
-                      {row.entityType === 'farmer' && sortDropdownObjects(assignmentOptions.farmers, (farmer) => farmer.farmer_name).filter(farmer => {
-                        const availability = farmerAvailability[farmer.fid] || [];
-                        return availability.some(item => item.vegetable_name === productName);
-                      }).map(farmer => (
+                      {row.entityType === 'farmer' && !farmerAvailabilityLoaded && (
+                        <option value="" disabled>Loading farmers...</option>
+                      )}
+                      {row.entityType === 'farmer' && sortDropdownObjects(
+                        filterFarmersByProductAvailability(
+                          assignmentOptions.farmers,
+                          farmerAvailability,
+                          productName,
+                          getFarmerFilterOptions(row)
+                        ),
+                        (farmer) => farmer.farmer_name
+                      ).map(farmer => (
                         <option key={`farmer-${farmer.fid}`} value={farmer.farmer_name}>{farmer.farmer_name}</option>
                       ))}
                       {row.entityType === 'supplier' && sortDropdownObjects(assignmentOptions.suppliers, (supplier) => supplier.supplier_name).map(supplier => (

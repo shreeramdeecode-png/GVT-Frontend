@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ConfirmDeleteModal from '../../common/ConfirmDeleteModal';
 import { petrolBulkApi } from '../../../api/petrolBulkApi';
-import { getAllFuelExpenses, updateFuelExpense } from '../../../api/fuelExpenseApi';
+import { getAllFuelExpenses, updateFuelExpensePaymentStatus } from '../../../api/fuelExpenseApi';
+import HistoryPaymentFilterBar, { PaymentStatusBadge } from '../common/HistoryPaymentFilterBar';
 
 const isFuelPaid = (row) =>
   String(row?.payment_status || 'unpaid').toLowerCase() === 'paid';
@@ -218,13 +219,7 @@ const PetrolBunkManagement = () => {
     }
   };
 
-  const applyFuelPaymentUpdate = async ({
-    mode,
-    rowsInView,
-    apiCall,
-    fallbackStatus,
-    setBusy
-  }) => {
+  const applyFuelPaymentUpdate = async ({ mode, rowsInView, fallbackStatus, setBusy }) => {
     if (!viewingHistory) return;
 
     const count = rowsInView.length;
@@ -255,70 +250,25 @@ const PetrolBunkManagement = () => {
 
     setBusy(true);
     try {
-      const expenseIds = rowsInView
-        .map((row) => getExpenseRowId(row))
-        .filter((id) => !Number.isNaN(id));
-
-      const payload = { expense_ids: expenseIds };
-      if (fromDate) payload.from_date = fromDate;
-      if (toDate) payload.to_date = toDate;
-
-      const bunkId = viewingHistory.pbid ?? viewingHistory.id;
-
-      const applyRowsFallback = async () => {
-        await Promise.all(
-          rowsInView.map((expense) => {
-            const id = getExpenseRowId(expense);
-            if (Number.isNaN(id)) return Promise.resolve();
-            return updateFuelExpense(id, { payment_status: fallbackStatus });
-          })
-        );
-        await refreshFuelHistory(viewingHistory, fromDate, toDate);
-        alert(`${rowsInView.length} transaction(s) updated`);
-      };
-
-      const applyResult = async (resBody) => {
-        const data = resBody?.data;
-        const updatedCount = data?.updated_count ?? rowsInView.length;
-
-        if (data?.fuelExpenses) {
-          if (data.bunk) setViewingHistory(data.bunk);
-          setFuelHistory(data.fuelExpenses);
-          setHistorySummary(data.summary || null);
-          if (!fromDate && !toDate) setAllTimeSummary(data.summary || null);
-        } else {
-          await refreshFuelHistory(viewingHistory, fromDate, toDate);
+      const updates = rowsInView.map((expense) => {
+        const id = getExpenseRowId(expense);
+        if (Number.isNaN(id)) {
+          return Promise.reject(new Error('Missing fuel expense id on a row'));
         }
-        alert(resBody?.message || `${updatedCount} transaction(s) updated`);
-      };
+        return updateFuelExpensePaymentStatus(id, fallbackStatus);
+      });
 
-      try {
-        const response = await apiCall(bunkId, payload);
-        const resBody = response.data;
-        const updatedCount = resBody?.data?.updated_count ?? 0;
-
-        if (updatedCount === 0) {
-          await applyRowsFallback();
-          return;
-        }
-
-        await applyResult(resBody);
-      } catch (apiError) {
-        const status = apiError.response?.status;
-        if (status !== 404 && status !== 405) {
-          throw apiError;
-        }
-
-        await applyRowsFallback();
-      }
+      await Promise.all(updates);
+      await refreshFuelHistory(viewingHistory, fromDate, toDate);
+      alert(`${count} transaction(s) updated`);
     } catch (error) {
       console.error(`Error updating fuel payment (${mode}):`, error);
-      const msg =
-        error.response?.data?.message ||
-        error.response?.data?.error ||
-        (typeof error === 'string' ? error : error.message) ||
-        'Failed to update payment status';
-      alert(msg);
+      const msg = error.message || 'Failed to update payment status';
+      alert(
+        msg.includes('404')
+          ? `${msg}\n\nRestart the backend (vsd_backend) and try again.`
+          : msg
+      );
     } finally {
       setBusy(false);
     }
@@ -329,7 +279,6 @@ const PetrolBunkManagement = () => {
     return applyFuelPaymentUpdate({
       mode: 'pay',
       rowsInView: unpaidInView,
-      apiCall: petrolBulkApi.markFuelPaid,
       fallbackStatus: 'paid',
       setBusy: setPayingFuel
     });
@@ -340,7 +289,6 @@ const PetrolBunkManagement = () => {
     return applyFuelPaymentUpdate({
       mode: 'revert',
       rowsInView: paidInView,
-      apiCall: petrolBulkApi.revertFuelPaid,
       fallbackStatus: 'unpaid',
       setBusy: setRevertingFuel
     });
@@ -473,8 +421,6 @@ const PetrolBunkManagement = () => {
   if (viewingHistory) {
     return (
       <div className="min-h-screen bg-gray-50">
-        {settingsTabs}
-
         <div className="px-4 sm:px-6 lg:px-8 py-6">
           <button
             onClick={handleBackToList}
@@ -486,7 +432,7 @@ const PetrolBunkManagement = () => {
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
             <h2 className="text-xl font-semibold text-gray-900 mb-1">{viewingHistory.name}</h2>
             <p className="text-sm text-gray-600 mb-4">{viewingHistory.location}</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
               <div>
                 <span className="text-gray-600">All-Time Fuel Amount: </span>
                 <span className="font-semibold text-gray-900">
@@ -505,94 +451,41 @@ const PetrolBunkManagement = () => {
                   {allTimeSummary?.transaction_count ?? historySummary?.transaction_count ?? 0}
                 </span>
               </div>
+              <div>
+                <span className="text-gray-600">Unpaid Fuel: </span>
+                <span className="font-semibold text-red-600">
+                  ₹{allTimeSummary?.unpaid_amount ?? historySummary?.unpaid_amount ?? '0.00'}
+                </span>
+              </div>
             </div>
 
-            <div className="flex flex-col lg:flex-row lg:items-end gap-4 pt-4 border-t border-gray-200">
-              <div className="flex flex-col sm:flex-row gap-3 flex-1">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">From Date</label>
-                  <input
-                    type="date"
-                    value={fromDate}
-                    onChange={(e) => setFromDate(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
-                  <input
-                    type="date"
-                    value={toDate}
-                    onChange={(e) => setToDate(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                  />
-                </div>
-                <div className="flex items-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleApplyDateFilter}
-                    disabled={loadingHistory}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
-                  >
-                    Apply Filter
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFromDate('');
-                      setToDate('');
-                      setDateFilterActive(false);
-                      if (viewingHistory) {
-                        setLoadingHistory(true);
-                        refreshFuelHistory(viewingHistory, '', '').finally(() =>
-                          setLoadingHistory(false)
-                        );
-                      }
-                    }}
-                    disabled={loadingHistory}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-3 lg:ml-auto">
-                {dateFilterActive && (
-                  <p className="text-sm text-gray-600 mr-1">
-                    Filtered Total:{' '}
-                    <span className="font-semibold text-gray-900">
-                      ₹{filteredDisplaySummary?.total_amount || '0.00'}
-                    </span>
-                  </p>
-                )}
-                <button
-                  type="button"
-                  onClick={handlePayNow}
-                  disabled={
-                    payingFuel ||
-                    revertingFuel ||
-                    loadingHistory ||
-                    unpaidInViewCount === 0
-                  }
-                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                >
-                  {payingFuel ? 'Processing...' : 'Pay Now'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRevertPayment}
-                  disabled={
-                    payingFuel ||
-                    revertingFuel ||
-                    loadingHistory ||
-                    paidInViewCount === 0
-                  }
-                  className="px-5 py-2 border border-amber-500 text-amber-700 bg-amber-50 rounded-lg text-sm font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                >
-                  {revertingFuel ? 'Reverting...' : 'Revert Payment'}
-                </button>
-              </div>
-            </div>
+            <HistoryPaymentFilterBar
+              fromDate={fromDate}
+              toDate={toDate}
+              onFromDateChange={setFromDate}
+              onToDateChange={setToDate}
+              onApplyFilter={handleApplyDateFilter}
+              onClear={() => {
+                setFromDate('');
+                setToDate('');
+                setDateFilterActive(false);
+                if (viewingHistory) {
+                  setLoadingHistory(true);
+                  refreshFuelHistory(viewingHistory, '', '').finally(() =>
+                    setLoadingHistory(false)
+                  );
+                }
+              }}
+              loading={loadingHistory}
+              dateFilterActive={dateFilterActive}
+              filteredTotal={filteredDisplaySummary?.total_amount || '0.00'}
+              paying={payingFuel}
+              reverting={revertingFuel}
+              unpaidCount={unpaidInViewCount}
+              paidCount={paidInViewCount}
+              onPayNow={handlePayNow}
+              onRevertPayment={handleRevertPayment}
+            />
           </div>
 
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -624,9 +517,7 @@ const PetrolBunkManagement = () => {
                       </td>
                     </tr>
                   ) : (
-                    fuelHistory.map((expense) => {
-                      const isPaid = isFuelPaid(expense);
-                      return (
+                    fuelHistory.map((expense) => (
                         <tr key={getExpenseRowId(expense) || expense.date} className="hover:bg-gray-50 transition-colors">
                           <td className="px-6 py-4 text-sm text-gray-600">{expense.date || '-'}</td>
                           <td className="px-6 py-4 text-sm text-gray-900">
@@ -640,19 +531,10 @@ const PetrolBunkManagement = () => {
                           <td className="px-6 py-4 text-sm text-gray-600">{expense.litre} L</td>
                           <td className="px-6 py-4 text-sm text-gray-600 text-center">₹{expense.total_amount}</td>
                           <td className="px-6 py-4 text-sm text-center">
-                            <span
-                              className={`inline-flex px-3 py-1 rounded-full text-xs font-medium ${
-                                isPaid
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-red-100 text-red-700'
-                              }`}
-                            >
-                              {isPaid ? 'Paid' : 'Unpaid'}
-                            </span>
+                            <PaymentStatusBadge paid={isFuelPaid(expense)} />
                           </td>
                         </tr>
-                      );
-                    })
+                      ))
                   )}
                 </tbody>
               </table>
