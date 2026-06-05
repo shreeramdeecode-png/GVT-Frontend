@@ -292,6 +292,7 @@ const NewOrder = () => {
 
               return {
                 id: index + 1,
+                oiid: item.oiid || null,
                 productId: item.product_id || item.product?.split(' - ')[0] || '',
                 productName: item.product || `${item.product_id} - ${item.product_name}` || '',
                 numBoxes: numBoxes,
@@ -1057,6 +1058,7 @@ const NewOrder = () => {
 
           return {
             productId: parseInt(product.productId),
+            ...(product.oiid ? { oiid: product.oiid } : {}),
             netWeight: product.netWeight.toString(),
             numBoxes: product.numBoxes ? formatNumBoxesForAPI(numBoxesNumeric, product.packingType) : undefined,
             packingType: product.packingType || undefined,
