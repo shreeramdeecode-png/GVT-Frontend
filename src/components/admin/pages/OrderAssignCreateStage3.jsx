@@ -6,7 +6,13 @@ import { updateStage3Assignment } from '../../../api/orderAssignmentApi';
 import { getAllAirports } from '../../../api/airportApi';
 import InsufficientStockModal from '../../../components/common/InsufficientStockModal';
 import { sortDropdownObjects } from '../../../utils/dropdownSort';
-import { applySplitWeightsToProductRows } from './FlowerOrderAssignStage3';
+import {
+  applySplitWeightsToProductRows,
+  buildGvtSummaryCards,
+  buildAirportGroupsFromProductRows,
+  loadTapeDataFromAirportGroups,
+  migrateTapeDataToRowIds,
+} from './FlowerOrderAssignStage3';
 
 const OrderAssignCreateStage3 = () => {
   const navigate = useNavigate();
@@ -255,6 +261,7 @@ const OrderAssignCreateStage3 = () => {
         let stage2LabourMap = {};
         let stage2BoxStatusMap = {}; // Track packed (available) boxes from Stage 2
         let stage3Products = [];
+        let pendingTapeData = null;
         let productCountMap = {};
         try {
           const { getOrderAssignment } = await import('../../../api/orderAssignmentApi');
@@ -468,29 +475,16 @@ const OrderAssignCreateStage3 = () => {
                 : assignmentData.stage3_data;
               stage3Products = stage3Data.products || [];
 
-              // Load airport tape data
-              const tapeFromGroups = {};
               const ag = stage3Data.summaryData?.airportGroups || stage3Data.airportGroups || {};
-              Object.values(ag).forEach((g) => {
-                if (!g || !g.airportName) return;
-                if (Array.isArray(g.tapes) && g.tapes.length > 0) {
-                  tapeFromGroups[g.airportName] = g.tapes.map(t => ({
-                    tapeName: t.tapeName || '',
-                    tapeQuantity: t.tapeQuantity != null ? t.tapeQuantity : '',
-                    tapeColor: t.tapeColor || ''
-                  }));
-                } else if (g.tapeName != null || g.tapeQuantity != null || g.tapeColor != null) {
-                  tapeFromGroups[g.airportName] = [{ tapeName: g.tapeName || '', tapeQuantity: g.tapeQuantity != null ? g.tapeQuantity : '', tapeColor: g.tapeColor || '' }];
-                }
-              });
+              const tapeFromGroups = loadTapeDataFromAirportGroups(ag);
               if (Object.keys(tapeFromGroups).length > 0) {
-                setAirportTapeData(tapeFromGroups);
+                pendingTapeData = tapeFromGroups;
               } else if (stage3Data.airportTapeData) {
                 const normalized = {};
                 Object.entries(stage3Data.airportTapeData).forEach(([apt, val]) => {
                   normalized[apt] = Array.isArray(val) ? val : [{ tapeName: val.tapeName || '', tapeQuantity: val.tapeQuantity != null ? val.tapeQuantity : '', tapeColor: val.tapeColor || '' }];
                 });
-                setAirportTapeData(normalized);
+                pendingTapeData = normalized;
               }
             } catch (e) {
               console.error('Error parsing stage3_data:', e);
@@ -622,6 +616,9 @@ const OrderAssignCreateStage3 = () => {
           }
           //console.log('Final product rows:', rows);
           commitProductRows(rows);
+          if (pendingTapeData) {
+            setAirportTapeData(migrateTapeDataToRowIds(rows, pendingTapeData));
+          }
           setStage2BoxStatus(stage2BoxStatusMap);
         }
       } catch (error) {
@@ -1123,52 +1120,13 @@ const OrderAssignCreateStage3 = () => {
         };
       });
 
-      // Generate airport groups for backend storage: one group per airport (order-wide).
-      // Multiple drivers can deliver to different airports; one driver can have multiple airports.
-      // Tape data is stored per airport inside each group to avoid duplicate/merge issues.
-      const airportGroups = {};
       const customerName = orderData?.customer_name || '';
-      const prefix = (customerName.replace(/\d+$/, '').trim() || customerName || 'CT').replace(/\s+/g, '');
-      const allAirports = [...new Set(productRows.filter(p => p.airportName).map(p => p.airportName))];
-
-      allAirports.forEach((airportName, index) => {
-        const sequentialNumber = String(index + 1).padStart(3, '0');
-        const airportCode = `${prefix}${sequentialNumber}`;
-        const airportProducts = productRows.filter(p => p.airportName === airportName);
-        const rawTape = airportTapeData[airportName];
-        const tapesArray = Array.isArray(rawTape) && rawTape.length > 0
-          ? rawTape.map(t => ({ tapeName: t.tapeName || '', tapeQuantity: t.tapeQuantity != null ? t.tapeQuantity : '', tapeColor: t.tapeColor || '' }))
-          : (rawTape && typeof rawTape === 'object' ? [{ tapeName: rawTape.tapeName || '', tapeQuantity: rawTape.tapeQuantity != null ? rawTape.tapeQuantity : '', tapeColor: rawTape.tapeColor || '' }] : []);
-        const firstTape = tapesArray[0] || {};
-
-        airportGroups[airportCode] = {
-          airportCode,
-          airportName: airportName,
-          airportLocation: airportProducts[0]?.airportLocation || '',
-          tapes: tapesArray,
-          tapeName: firstTape.tapeName || '',
-          tapeQuantity: firstTape.tapeQuantity || '',
-          tapeColor: firstTape.tapeColor || '',
-          products: airportProducts.map(p => ({
-            product: p.product,
-            grossWeight: p.grossWeight,
-            labour: p.labour,
-            ct: p.ct || '',
-            noOfPkgs: parseInt(p.noOfPkgs) || 0,
-            driver: drivers.find(d => d.did === parseInt(p.selectedDriver))?.driver_name || '',
-            vehicleNumber: p.vehicleNumber || '',
-            status: p.status || 'pending',
-            oiid: p.oiid
-          }))
-        };
-      });
-
-      // Array form: one entry per airport (for backends that treat object keys as unique per driver)
-      const airportGroupsArray = allAirports.map((airportName, index) => {
-        const code = `${prefix}${String(index + 1).padStart(3, '0')}`;
-        const g = airportGroups[code];
-        return g ? { ...g } : null;
-      }).filter(Boolean);
+      const { airportGroups, airportGroupsArray } = buildAirportGroupsFromProductRows(
+        productRows,
+        customerName,
+        airportTapeData,
+        drivers
+      );
 
       const summaryData = {
         driverAssignments,
@@ -1505,466 +1463,339 @@ const OrderAssignCreateStage3 = () => {
             </div>
             <div>
               <h2 className="text-lg font-bold text-gray-900">Airport Delivery Summary</h2>
-              <p className="text-sm text-gray-600">Products grouped by assigned driver</p>
+              <p className="text-sm text-gray-600">One GVT card per split delivery</p>
             </div>
           </div>
 
           {/* Desktop Summary */}
           <div className="hidden lg:block space-y-6">
-            {(() => {
-              const groupedByDriver = {};
-              productRows.forEach(row => {
-                if (row.selectedDriver) {
-                  const driverInfo = drivers.find(d => d.did === parseInt(row.selectedDriver));
-                  const driverKey = driverInfo ? `${driverInfo.driver_name} - ${driverInfo.driver_id}` : row.selectedDriver;
+            {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
+              const product = card.product;
+              const groupKey = product.id;
+              const airportCode = product.sequentialCode || '-';
 
-                  if (!groupedByDriver[driverKey]) {
-                    groupedByDriver[driverKey] = {
-                      driverInfo,
-                      products: []
-                    };
-                  }
-                  groupedByDriver[driverKey].products.push(row);
-                }
-              });
-
-              // Build global airport code map across all drivers
-              const globalAirportCodeMap = {};
-              const allAirports = [...new Set(productRows.filter(p => p.airportName).map(p => p.airportName))];
-              const customerName = orderData?.customer_name || '';
-              const prefix = customerName.replace(/\d+$/, '').trim() || customerName;
-
-              allAirports.forEach((airport, index) => {
-                const sequentialNumber = String(index + 1).padStart(3, '0');
-                globalAirportCodeMap[airport] = `${prefix}${sequentialNumber}`;
-              });
-
-              return Object.entries(groupedByDriver).map(([driverKey, data]) => {
-                const totalPackages = data.products.reduce((sum, p) => sum + (parseInt(p.noOfPkgs) || 0), 0);
-                const totalWeight = data.products.reduce((sum, p) => {
-                  const weight = parseFloat(p.grossWeight) || 0;
-                  return sum + weight;
-                }, 0);
-
-                const productsWithSequentialNumbers = data.products.map(product => ({
-                  ...product,
-                  sequentialCode: globalAirportCodeMap[product.airportName] || '-'
-                }));
-
-                return (
-                  <div key={driverKey} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
-                    <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
-                      <div className="flex items-center justify-between text-white">
-                        <div className="flex items-center gap-3">
-                          <Truck className="w-6 h-6" />
-                          <div>
-                            <h3 className="text-lg font-bold">{driverKey}</h3>
-                            <p className="text-sm text-emerald-100">{data.products.length} Products • {data.driverInfo?.vehicle_number || 'N/A'}</p>
-                          </div>
-                        </div>
-                        <div className="flex gap-2">
-                          {[...new Set(productsWithSequentialNumbers.map(p => p.sequentialCode).filter(c => c !== '-'))].map(code => (
-                            <span key={code} className="px-3 py-1 bg-white/20 rounded-lg text-sm font-bold">{code}</span>
-                          ))}
+              return (
+                <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
+                  <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
+                    <div className="flex items-center justify-between text-white">
+                      <div className="flex items-center gap-3">
+                        <Truck className="w-6 h-6" />
+                        <div>
+                          <h3 className="text-lg font-bold">{card.driverKey}</h3>
+                          <p className="text-sm text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
                       </div>
-                    </div>
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead className="bg-emerald-50">
-                          <tr>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Product</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Gross Weight</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Labour</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">CT</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Packages</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Airport</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Location</th>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                          {productsWithSequentialNumbers.map((product, idx) => (
-                            <tr key={idx} className="hover:bg-emerald-50 transition-colors">
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                                  <span className="text-sm font-medium text-gray-900">{product.product}</span>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm font-semibold text-gray-900">{product.grossWeight}</span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-gray-900">{product.labour}</span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-gray-900">{product.ct || '-'}</span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-gray-900">{product.noOfPkgs || '-'}</span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <MapPin className="w-4 h-4 text-gray-400" />
-                                  <span className="text-sm text-gray-900">{product.airportName || '-'}</span>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-gray-600">{product.airportLocation || '-'}</span>
-                              </td>
-
-                              <td className="px-4 py-3">
-                                <select
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                                  value={product.status || 'pending'}
-                                  onChange={(e) => {
-                                    const updatedRows = [...productRows];
-                                    const rowIndex = productRows.findIndex(r => r.id === product.id);
-                                    if (rowIndex !== -1) {
-                                      updatedRows[rowIndex].status = e.target.value;
-                                      commitProductRows(updatedRows);
-                                    }
-                                  }}
-                                >
-                                  <option value="completed">Completed</option>
-                                  <option value="ontrip">On Trip</option>
-                                  <option value="pending">Pending</option>
-                                </select>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-
-                        {/* Tape Selection Section - Above Driver Total */}
-                        {(() => {
-                          const driverAirports = [...new Set(productsWithSequentialNumbers.map(p => p.airportName).filter(a => a))];
-
-                          if (driverAirports.length > 0) {
-                            return (
-                              <tbody>
-                                <tr>
-                                  <td colSpan="8" className="px-4 py-4 bg-blue-50 border-t-2 border-blue-200">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                      {driverAirports.map((airport) => {
-                                        const airportCode = globalAirportCodeMap[airport] || '-';
-
-                                        return (
-                                          <div key={airport} className="border-2 border-blue-200 rounded-lg p-3 bg-white">
-                                            <div className="mb-2">
-                                              <div className="flex items-center justify-between mb-1">
-                                                <span className="text-xs font-bold text-blue-600">{airportCode}</span>
-                                                <MapPin className="w-3 h-3 text-gray-400" />
-                                              </div>
-                                              <p className="text-xs text-gray-600 font-medium">{airport}</p>
-                                            </div>
-
-                                            <div className="space-y-3">
-                                              {getTapesForAirport(airport).map((tapeEntry, tapeIndex) => (
-                                                <div key={tapeIndex} className="flex gap-2 items-end border border-gray-200 rounded p-2 bg-gray-50/50">
-                                                  <div className="flex-1 min-w-0 space-y-1">
-                                                    <label className="block text-xs font-semibold text-gray-700">Tape Name</label>
-                                                    <select
-                                                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
-                                                      value={tapeEntry.tapeName || ''}
-                                                      onChange={(e) => {
-                                                        const selectedName = e.target.value;
-                                                        const selectedTape = tapes.find(t => t.name === selectedName);
-                                                        updateTapeForAirport(airport, tapeIndex, { tapeName: selectedName, tapeColor: selectedTape?.color || '' });
-                                                      }}
-                                                    >
-                                                      <option value="">Select tape...</option>
-                                                      {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
-                                                        <option key={tape.iid} value={tape.name}>{tape.name}</option>
-                                                      ))}
-                                                    </select>
-                                                  </div>
-                                                  <div className="flex-1 min-w-0 space-y-1">
-                                                    <label className="block text-xs font-semibold text-gray-700">Qty</label>
-                                                    <input
-                                                      type="text"
-                                                      value={tapeEntry.tapeQuantity ?? ''}
-                                                      placeholder="Qty"
-                                                      onChange={(e) => updateTapeForAirport(airport, tapeIndex, 'tapeQuantity', e.target.value)}
-                                                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                                                    />
-                                                  </div>
-                                                  <div className="flex items-center gap-1">
-                                                    {getTapesForAirport(airport).length > 1 && (
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => removeTapeForAirport(airport, tapeIndex)}
-                                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded"
-                                                        title="Remove tape"
-                                                      >
-                                                        <X className="w-4 h-4" />
-                                                      </button>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              ))}
-                                              <button
-                                                type="button"
-                                                onClick={() => addTapeForAirport(airport)}
-                                                className="flex items-center gap-1.5 w-full justify-center py-2 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-medium"
-                                              >
-                                                <Plus className="w-4 h-4" /> Add another tape
-                                              </button>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  </td>
-                                </tr>
-                              </tbody>
-                            );
-                          }
-                          return null;
-                        })()}
-
-                        <tfoot className="bg-emerald-100 border-t-2 border-emerald-300">
-                          <tr>
-                            <td colSpan="4" className="px-4 py-3 text-right">
-                              <span className="text-sm font-bold text-gray-900">Driver Total:</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="text-sm font-bold text-emerald-700">{totalPackages} pkgs</span>
-                            </td>
-                            <td colSpan="3" className="px-4 py-3">
-                              <span className="text-sm font-bold text-emerald-700">{totalWeight.toFixed(2)} kg</span>
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
+                      {airportCode !== '-' && (
+                        <span className="px-3 py-1 bg-white/20 rounded-lg text-sm font-bold">{airportCode}</span>
+                      )}
                     </div>
                   </div>
-                );
-              });
-            })()}
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-emerald-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Product</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Gross Weight</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Labour</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">CT</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Packages</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Airport</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Location</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        <tr className="hover:bg-emerald-50 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                              <span className="text-sm font-medium text-gray-900">{product.product}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm font-semibold text-gray-900">{product.grossWeight}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-gray-900">{product.labour}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-gray-900">{product.ct || '-'}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-gray-900">{product.noOfPkgs || '-'}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4 text-gray-400" />
+                              <span className="text-sm text-gray-900">{product.airportName || '-'}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-gray-600">{product.airportLocation || '-'}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <select
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                              value={product.status || 'pending'}
+                              onChange={(e) => {
+                                const updatedRows = [...productRows];
+                                const rowIndex = productRows.findIndex((r) => r.id === product.id);
+                                if (rowIndex !== -1) {
+                                  updatedRows[rowIndex].status = e.target.value;
+                                  commitProductRows(updatedRows);
+                                }
+                              }}
+                            >
+                              <option value="completed">Completed</option>
+                              <option value="ontrip">On Trip</option>
+                              <option value="pending">Pending</option>
+                            </select>
+                          </td>
+                        </tr>
+                      </tbody>
+                      <tbody>
+                        <tr>
+                          <td colSpan="8" className="px-4 py-4 bg-blue-50 border-t-2 border-blue-200">
+                            <div className="border-2 border-blue-200 rounded-lg p-3 bg-white max-w-md">
+                              <div className="mb-2">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs font-bold text-blue-600">{airportCode}</span>
+                                  <MapPin className="w-3 h-3 text-gray-400" />
+                                </div>
+                                <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
+                                <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
+                              </div>
+                              <div className="space-y-3">
+                                {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
+                                  <div key={tapeIndex} className="flex gap-2 items-end border border-gray-200 rounded p-2 bg-gray-50/50">
+                                    <div className="flex-1 min-w-0 space-y-1">
+                                      <label className="block text-xs font-semibold text-gray-700">Tape Name</label>
+                                      <select
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                                        value={tapeEntry.tapeName || ''}
+                                        onChange={(e) => {
+                                          const selectedName = e.target.value;
+                                          const selectedTape = tapes.find((t) => t.name === selectedName);
+                                          updateTapeForAirport(groupKey, tapeIndex, { tapeName: selectedName, tapeColor: selectedTape?.color || '' });
+                                        }}
+                                      >
+                                        <option value="">Select tape...</option>
+                                        {sortDropdownObjects(tapes, (tape) => tape.name).map((tape) => (
+                                          <option key={tape.iid} value={tape.name}>{tape.name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div className="flex-1 min-w-0 space-y-1">
+                                      <label className="block text-xs font-semibold text-gray-700">Qty</label>
+                                      <input
+                                        type="text"
+                                        value={tapeEntry.tapeQuantity ?? ''}
+                                        placeholder="Qty"
+                                        onChange={(e) => updateTapeForAirport(groupKey, tapeIndex, 'tapeQuantity', e.target.value)}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                                      />
+                                    </div>
+                                    {getTapesForAirport(groupKey).length > 1 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => removeTapeForAirport(groupKey, tapeIndex)}
+                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                                        title="Remove tape"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                                <button
+                                  type="button"
+                                  onClick={() => addTapeForAirport(groupKey)}
+                                  className="flex items-center gap-1.5 w-full justify-center py-2 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-medium"
+                                >
+                                  <Plus className="w-4 h-4" /> Add another tape
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                      <tfoot className="bg-emerald-100 border-t-2 border-emerald-300">
+                        <tr>
+                          <td colSpan="4" className="px-4 py-3 text-right">
+                            <span className="text-sm font-bold text-gray-900">GVT Total:</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm font-bold text-emerald-700">{card.totalPackages} pkgs</span>
+                          </td>
+                          <td colSpan="3" className="px-4 py-3">
+                            <span className="text-sm font-bold text-emerald-700">{card.totalWeight.toFixed(2)} kg</span>
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Mobile Summary */}
           <div className="lg:hidden space-y-6">
-            {(() => {
-              const groupedByDriver = {};
-              productRows.forEach(row => {
-                if (row.selectedDriver) {
-                  const driverInfo = drivers.find(d => d.did === parseInt(row.selectedDriver));
-                  const driverKey = driverInfo ? `${driverInfo.driver_name} - ${driverInfo.driver_id}` : row.selectedDriver;
+            {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
+              const product = card.product;
+              const groupKey = product.id;
+              const airportCode = product.sequentialCode || '-';
 
-                  if (!groupedByDriver[driverKey]) {
-                    groupedByDriver[driverKey] = {
-                      driverInfo,
-                      products: []
-                    };
-                  }
-                  groupedByDriver[driverKey].products.push(row);
-                }
-              });
-
-              const globalAirportCodeMap = {};
-              const allAirports = [...new Set(productRows.filter(p => p.airportName).map(p => p.airportName))];
-              const customerName = orderData?.customer_name || '';
-              const prefix = customerName.replace(/\d+$/, '').trim() || customerName;
-
-              allAirports.forEach((airport, index) => {
-                const sequentialNumber = String(index + 1).padStart(3, '0');
-                globalAirportCodeMap[airport] = `${prefix}${sequentialNumber}`;
-              });
-
-              return Object.entries(groupedByDriver).map(([driverKey, data]) => {
-                const totalPackages = data.products.reduce((sum, p) => sum + (parseInt(p.noOfPkgs) || 0), 0);
-                const totalWeight = data.products.reduce((sum, p) => sum + (parseFloat(p.grossWeight) || 0), 0);
-
-                const productsWithSequentialNumbers = data.products.map(product => ({
-                  ...product,
-                  sequentialCode: globalAirportCodeMap[product.airportName] || '-'
-                }));
-
-                return (
-                  <div key={driverKey} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
-                    <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3">
-                      <div className="flex items-center justify-between text-white">
-                        <div className="flex items-center gap-2">
-                          <Truck className="w-5 h-5" />
-                          <div>
-                            <h3 className="text-base font-bold">{driverKey}</h3>
-                            <p className="text-xs text-emerald-100">{data.products.length} Products • {data.driverInfo?.vehicle_number || 'N/A'}</p>
-                          </div>
+              return (
+                <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
+                  <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3">
+                    <div className="flex items-center justify-between text-white">
+                      <div className="flex items-center gap-2">
+                        <Truck className="w-5 h-5" />
+                        <div>
+                          <h3 className="text-base font-bold">{card.driverKey}</h3>
+                          <p className="text-xs text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
-                        <div className="flex gap-2">
-                          {[...new Set(productsWithSequentialNumbers.map(p => p.sequentialCode).filter(c => c !== '-'))].map(code => (
-                            <span key={code} className="px-2 py-1 bg-white/20 rounded text-xs font-bold">{code}</span>
-                          ))}
+                      </div>
+                      {airportCode !== '-' && (
+                        <span className="px-2 py-1 bg-white/20 rounded text-xs font-bold">{airportCode}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-4 space-y-3">
+                    <div className="border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                        <span className="text-sm font-semibold text-gray-900">{product.product}</span>
+                      </div>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Gross Weight:</span>
+                          <span className="font-semibold text-gray-900">{product.grossWeight}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Labour:</span>
+                          <span className="text-gray-900">{product.labour}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">CT:</span>
+                          <span className="text-gray-900">{product.ct || '-'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Packages:</span>
+                          <span className="text-gray-900">{product.noOfPkgs || '-'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Airport:</span>
+                          <span className="text-gray-900">{product.airportName || '-'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Location:</span>
+                          <span className="text-gray-900">{product.airportLocation || '-'}</span>
+                        </div>
+                        <div className="pt-2 border-t border-gray-200">
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">Status</label>
+                          <select
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                            value={product.status || 'pending'}
+                            onChange={(e) => {
+                              const updatedRows = [...productRows];
+                              const rowIndex = productRows.findIndex((r) => r.id === product.id);
+                              if (rowIndex !== -1) {
+                                updatedRows[rowIndex].status = e.target.value;
+                                commitProductRows(updatedRows);
+                              }
+                            }}
+                          >
+                            <option value="completed">Completed</option>
+                            <option value="ontrip">On Trip</option>
+                            <option value="pending">Pending</option>
+                          </select>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-4 space-y-3">
-                      {productsWithSequentialNumbers.map((product, idx) => (
-                        <div key={idx} className="border border-gray-200 rounded-lg p-3">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                                <span className="text-sm font-semibold text-gray-900">{product.product}</span>
-                              </div>
-                            </div>
+                    <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
+                      <div className="border-2 border-blue-200 rounded-lg p-3 bg-white">
+                        <div className="mb-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-blue-600">{airportCode}</span>
+                            <MapPin className="w-3 h-3 text-gray-400" />
                           </div>
-
-                          <div className="space-y-2 text-sm">
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Gross Weight:</span>
-                              <span className="font-semibold text-gray-900">{product.grossWeight}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Labour:</span>
-                              <span className="text-gray-900">{product.labour}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">CT:</span>
-                              <span className="text-gray-900">{product.ct || '-'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Packages:</span>
-                              <span className="text-gray-900">{product.noOfPkgs || '-'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Airport:</span>
-                              <span className="text-gray-900">{product.airportName || '-'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Location:</span>
-                              <span className="text-gray-900">{product.airportLocation || '-'}</span>
-                            </div>
-
-                            <div className="pt-2 border-t border-gray-200">
-                              <label className="block text-xs font-semibold text-gray-700 mb-1">Status</label>
-                              <select
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                                value={product.status || 'pending'}
-                                onChange={(e) => {
-                                  const updatedRows = [...productRows];
-                                  const rowIndex = productRows.findIndex(r => r.id === product.id);
-                                  if (rowIndex !== -1) {
-                                    updatedRows[rowIndex].status = e.target.value;
-                                    commitProductRows(updatedRows);
-                                  }
-                                }}
-                              >
-                                <option value="completed">Completed</option>
-                                <option value="ontrip">On Trip</option>
-                                <option value="pending">Pending</option>
-                              </select>
-                            </div>
-                          </div>
+                          <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
+                          <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
                         </div>
-                      ))}
-
-                      {/* Tape Selection Section - Above Driver Total */}
-                      {(() => {
-                        const driverAirports = [...new Set(productsWithSequentialNumbers.map(p => p.airportName).filter(a => a))];
-
-                        if (driverAirports.length > 0) {
-                          return (
-                            <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
-                              <div className="mb-3">
-                                <h4 className="text-sm font-bold text-blue-900 mb-1">Tape Selection for Airport Groups</h4>
-                                <p className="text-xs text-gray-600">Select tape color and quantity for each airport</p>
+                        <div className="space-y-3">
+                          {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
+                            <div key={tapeIndex} className="flex gap-2 items-end border border-gray-200 rounded p-2 bg-gray-50/50">
+                              <div className="flex-1 min-w-0 space-y-1">
+                                <label className="block text-xs font-semibold text-gray-700">Tape Name</label>
+                                <select
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                                  value={tapeEntry.tapeName || ''}
+                                  onChange={(e) => {
+                                    const selectedName = e.target.value;
+                                    const selectedTape = tapes.find((t) => t.name === selectedName);
+                                    updateTapeForAirport(groupKey, tapeIndex, { tapeName: selectedName, tapeColor: selectedTape?.color || '' });
+                                  }}
+                                >
+                                  <option value="">Select tape...</option>
+                                  {sortDropdownObjects(tapes, (tape) => tape.name).map((tape) => (
+                                    <option key={tape.iid} value={tape.name}>{tape.name}</option>
+                                  ))}
+                                </select>
                               </div>
-                              <div className="space-y-3">
-                                {driverAirports.map((airport) => {
-                                  const airportCode = globalAirportCodeMap[airport] || '-';
-
-                                  return (
-                                    <div key={airport} className="border-2 border-blue-200 rounded-lg p-3 bg-white">
-                                      <div className="mb-2">
-                                        <div className="flex items-center justify-between mb-1">
-                                          <span className="text-xs font-bold text-blue-600">{airportCode}</span>
-                                          <MapPin className="w-3 h-3 text-gray-400" />
-                                        </div>
-                                        <p className="text-xs text-gray-600 font-medium">{airport}</p>
-                                      </div>
-
-                                      <div className="space-y-3">
-                                        {getTapesForAirport(airport).map((tapeEntry, tapeIndex) => (
-                                          <div key={tapeIndex} className="flex gap-2 items-end border border-gray-200 rounded p-2 bg-gray-50/50">
-                                            <div className="flex-1 min-w-0 space-y-1">
-                                              <label className="block text-xs font-semibold text-gray-700">Tape Name</label>
-                                              <select
-                                                className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
-                                                value={tapeEntry.tapeName || ''}
-                                                onChange={(e) => {
-                                                  const selectedName = e.target.value;
-                                                  const selectedTape = tapes.find(t => t.name === selectedName);
-                                                  updateTapeForAirport(airport, tapeIndex, { tapeName: selectedName, tapeColor: selectedTape?.color || '' });
-                                                }}
-                                              >
-                                                <option value="">Select tape...</option>
-                                                {sortDropdownObjects(tapes, (tape) => tape.name).map(tape => (
-                                                  <option key={tape.iid} value={tape.name}>{tape.name}</option>
-                                                ))}
-                                              </select>
-                                            </div>
-                                            <div className="flex-1 min-w-0 space-y-1">
-                                              <label className="block text-xs font-semibold text-gray-700">Qty</label>
-                                              <input
-                                                type="text"
-                                                value={tapeEntry.tapeQuantity ?? ''}
-                                                placeholder="Qty"
-                                                onChange={(e) => updateTapeForAirport(airport, tapeIndex, 'tapeQuantity', e.target.value)}
-                                                className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                                              />
-                                            </div>
-                                            {getTapesForAirport(airport).length > 1 && (
-                                              <button
-                                                type="button"
-                                                onClick={() => removeTapeForAirport(airport, tapeIndex)}
-                                                className="p-1.5 text-red-600 hover:bg-red-50 rounded"
-                                                title="Remove tape"
-                                              >
-                                                <X className="w-4 h-4" />
-                                              </button>
-                                            )}
-                                          </div>
-                                        ))}
-                                        <button
-                                          type="button"
-                                          onClick={() => addTapeForAirport(airport)}
-                                          className="flex items-center gap-1.5 w-full justify-center py-2 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-medium"
-                                        >
-                                          <Plus className="w-4 h-4" /> Add another tape
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                              <div className="flex-1 min-w-0 space-y-1">
+                                <label className="block text-xs font-semibold text-gray-700">Qty</label>
+                                <input
+                                  type="text"
+                                  value={tapeEntry.tapeQuantity ?? ''}
+                                  placeholder="Qty"
+                                  onChange={(e) => updateTapeForAirport(groupKey, tapeIndex, 'tapeQuantity', e.target.value)}
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                                />
                               </div>
+                              {getTapesForAirport(groupKey).length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeTapeForAirport(groupKey, tapeIndex)}
+                                  className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                                  title="Remove tape"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
-                          );
-                        }
-                        return null;
-                      })()}
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => addTapeForAirport(groupKey)}
+                            className="flex items-center gap-1.5 w-full justify-center py-2 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 hover:bg-blue-50 text-xs font-medium"
+                          >
+                            <Plus className="w-4 h-4" /> Add another tape
+                          </button>
+                        </div>
+                      </div>
+                    </div>
 
-                      <div className="bg-emerald-100 rounded-lg p-3 border-2 border-emerald-300">
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="font-bold text-gray-900">Total Packages:</span>
-                            <span className="font-bold text-emerald-700">{totalPackages} pkgs</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="font-bold text-gray-900">Total Weight:</span>
-                            <span className="font-bold text-emerald-700">{totalWeight.toFixed(2)} kg</span>
-                          </div>
+                    <div className="bg-emerald-100 rounded-lg p-3 border-2 border-emerald-300">
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="font-bold text-gray-900">GVT Total:</span>
+                          <span className="font-bold text-emerald-700">{card.totalPackages} pkgs</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-bold text-gray-900">Weight:</span>
+                          <span className="font-bold text-emerald-700">{card.totalWeight.toFixed(2)} kg</span>
                         </div>
                       </div>
                     </div>
                   </div>
-                );
-              });
-            })()}
+                </div>
+              );
+            })}
           </div>
 
           {/* Grand Total Section */}

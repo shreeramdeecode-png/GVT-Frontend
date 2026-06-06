@@ -20,6 +20,9 @@ import {
     buildStage3WeightSplitMap,
     getSplitWeightForRow,
     assignDriverNetFromSplitProducts,
+    buildGvtCodeByRowId,
+    getGvtDeliveryRows,
+    getGvtCustomerPrefix,
 } from './FlowerOrderAssignStage3';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -86,6 +89,213 @@ const assignStage4NetToDrivers = (productsByDriver) => {
     assignDriverNetFromSplitProducts(productsByDriver);
 };
 
+export const getStage3DeliveryRowId = (item) =>
+    item?.id ?? `${item?.oiid}-${item?.assignmentIndex ?? 0}`;
+
+const getTapeQtyFromAirportGroup = (ag) => {
+    if (Array.isArray(ag?.tapes) && ag.tapes.length > 0) {
+        return ag.tapes.reduce(
+            (sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0),
+            0
+        );
+    }
+    return parseFloat(ag?.tapeQuantity || ag?.tapeQty || 0) || 0;
+};
+
+const getTapeQtyFromTapeData = (tapeInfo) => {
+    if (Array.isArray(tapeInfo)) {
+        return tapeInfo.reduce(
+            (sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0),
+            0
+        );
+    }
+    if (tapeInfo && typeof tapeInfo === 'object') {
+        return parseFloat(tapeInfo.tapeQuantity || tapeInfo.tapeQty || 0) || 0;
+    }
+    return 0;
+};
+
+export function resolveAirportCodeForDeliveryRow(row, summaryAirportGroups, deliveryData, customerName) {
+    const rowId = getStage3DeliveryRowId(row);
+    for (const [code, ag] of Object.entries(summaryAirportGroups || {})) {
+        if (ag?.rowId != null && String(ag.rowId) === String(rowId)) return code;
+    }
+    const gvtCodeByRowId = buildGvtCodeByRowId(deliveryData, customerName);
+    if (row?.id != null && gvtCodeByRowId[row.id]) return gvtCodeByRowId[row.id];
+    const gvtRows = getGvtDeliveryRows(deliveryData);
+    const idx = gvtRows.indexOf(row);
+    if (idx >= 0) {
+        const prefix = getGvtCustomerPrefix(customerName);
+        return `${prefix}${String(idx + 1).padStart(3, '0')}`;
+    }
+    return null;
+}
+
+const resolveDriverForDeliveryRow = (item, drivers, airportGroups) => {
+    const product = item.product || item.productName || '-';
+    let driverName = '';
+    let driverInfo = null;
+
+    if (item.selectedDriver) {
+        driverInfo = drivers.find(
+            (d) =>
+                String(d.did) === String(item.selectedDriver) ||
+                String(d.driver_id) === String(item.selectedDriver)
+        );
+        if (!driverInfo) {
+            const did = resolveDriverDid(drivers, item.selectedDriver);
+            if (did != null) {
+                driverInfo = drivers.find((d) => String(d.did) === String(did));
+            }
+        }
+        if (driverInfo) driverName = driverInfo.driver_name;
+    }
+
+    if (!driverName && (item.driver || item.driverName)) {
+        driverName = item.driver || item.driverName;
+    }
+
+    if (!driverName) {
+        for (const airportData of Object.values(airportGroups || {})) {
+            const productInGroup = airportData.products?.find(
+                (p) => (p.product || p.productName) === product
+            );
+            if (productInGroup?.driver) {
+                driverName = productInGroup.driver;
+                break;
+            }
+        }
+    }
+
+    if (!driverName) driverName = 'Unassigned';
+
+    if (!driverInfo && driverName !== 'Unassigned') {
+        const did = resolveDriverDid(drivers, driverName);
+        driverInfo =
+            drivers.find((d) => String(d.did) === String(did)) ||
+            drivers.find(
+                (d) => (d.driver_name || '').toLowerCase() === driverName.toLowerCase()
+            ) ||
+            { mobile_number: '', vehicle_number: '' };
+    }
+
+    return { driverName, driverInfo };
+};
+
+const getTapeQtyForGvtRow = (summaryAirportGroups, rowId, airportTapeData) => {
+    for (const ag of Object.values(summaryAirportGroups || {})) {
+        if (ag?.rowId != null && String(ag.rowId) === String(rowId)) {
+            return getTapeQtyFromAirportGroup(ag);
+        }
+    }
+    if (rowId != null && airportTapeData?.[rowId] != null) {
+        return getTapeQtyFromTapeData(airportTapeData[rowId]);
+    }
+    return 0;
+};
+
+/** One GVT bill card per split delivery row (matches Stage 3 assign UI). */
+export function buildStage3GvtReportCards({
+    deliveryData,
+    drivers,
+    order,
+    stage2LabourMap,
+    weightSplitMap,
+    stage4PriceByProduct,
+    summaryAirportGroups,
+    airportTapeData,
+    assignment,
+    labourRates,
+    excessKmRecords,
+    driverRates,
+    fuelExpenses,
+}) {
+    const productsByGvt = {};
+    const customerName = order?.customer_name || '';
+    const groupsForCode = Object.keys(summaryAirportGroups || {}).length
+        ? summaryAirportGroups
+        : {};
+
+    getGvtDeliveryRows(deliveryData).forEach((item, index) => {
+        const product = item.product || item.productName || '-';
+        const rowId = getStage3DeliveryRowId(item);
+        const { driverName, driverInfo } = resolveDriverForDeliveryRow(
+            item,
+            drivers,
+            groupsForCode
+        );
+
+        const airportCode =
+            resolveAirportCodeForDeliveryRow(
+                item,
+                summaryAirportGroups,
+                deliveryData,
+                customerName
+            ) || `GVT${String(index + 1).padStart(3, '0')}`;
+
+        const split = getSplitWeightForRow(item, weightSplitMap);
+        const displayKg = split.displayKg;
+        const netWeight = split.netKg > 0 ? split.netKg : split.grossKg;
+
+        const productKey = normalizeProductName(product);
+        const pricePerKg = stage4PriceByProduct[productKey] || 0;
+        const productTotal = pricePerKg * netWeight;
+        const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
+
+        productsByGvt[airportCode] = {
+            driverName,
+            products: [{
+                product,
+                grossWeight: displayKg,
+                netWeight,
+                rate: pricePerKg,
+                amount: productTotal,
+                box: noOfPkgs,
+                ct: item.ct || item.CT,
+                labour: item.labour || item.labourName || stage2LabourMap[product],
+                packingType: item.packingType || item.packing_type || '',
+                sNo: 1,
+            }],
+            totalAmount: productTotal,
+            totalWeight: displayKg,
+            totalBoxes: noOfPkgs,
+            airportName: item.airportName || item.airport_name || '-',
+            airportCode,
+            driverInfo,
+            tapeQuantity: getTapeQtyForGvtRow(summaryAirportGroups, rowId, airportTapeData),
+            rowId,
+        };
+    });
+
+    assignStage4NetToDrivers(productsByGvt);
+
+    const stage2LabourWageMap = buildStage2LabourWageMap(assignment);
+
+    Object.values(productsByGvt).forEach((cardData) => {
+        const driverRef =
+            cardData.driverInfo?.did ||
+            cardData.driverInfo?.driver_id ||
+            cardData.driverInfo?.driver_name ||
+            cardData.driverName;
+        cardData.localOrder = getDriverPayoutExcessForReport(
+            driverRef,
+            order?.order_received_date,
+            excessKmRecords,
+            driverRates,
+            fuelExpenses,
+            drivers
+        );
+        const { rows, labourCost } = computeLabourExpenseForProducts(
+            cardData.products,
+            stage2LabourWageMap,
+            labourRates
+        );
+        cardData.labourRows = rows;
+        cardData.labourCost = labourCost;
+    });
+
+    return productsByGvt;
+};
 
 // --- Order report helpers (from utils) ---
 /** Stage 2 labour wages for Stage 3 packaging expense rows on order report. */
@@ -414,182 +624,27 @@ const ReportOrderView = () => {
             }
         }
 
-        let productsByDriver = {};
         const weightSplitMap = buildStage3WeightSplitMap(
             deliveryData,
             order?.items || [],
             stage4NetByProduct
         );
 
-        deliveryData.forEach((item) => {
-            const product = item.product || item.productName || '-';
-            let driverName = '';
-            let driverInfo = null;
-
-            if (item.selectedDriver) {
-                driverInfo = drivers.find(
-                    (d) =>
-                        String(d.did) === String(item.selectedDriver) ||
-                        String(d.driver_id) === String(item.selectedDriver)
-                );
-                if (!driverInfo) {
-                    const did = resolveDriverDid(drivers, item.selectedDriver);
-                    if (did != null) {
-                        driverInfo = drivers.find((d) => String(d.did) === String(did));
-                    }
-                }
-                if (driverInfo) driverName = driverInfo.driver_name;
-            }
-
-            if (!driverName && (item.driver || item.driverName)) {
-                driverName = item.driver || item.driverName;
-            }
-
-            if (!driverName) {
-                for (const [airportCode, airportData] of Object.entries(airportGroups)) {
-                    const productInGroup = airportData.products?.find(p => (p.product || p.productName) === product);
-                    if (productInGroup) {
-                        driverName = productInGroup.driver || '';
-                        break;
-                    }
-                }
-            }
-
-            if (!driverName) driverName = 'Unassigned';
-
-            if (!productsByDriver[driverName]) {
-                productsByDriver[driverName] = {
-                    products: [],
-                    totalAmount: 0,
-                    totalWeight: 0,
-                    totalBoxes: 0,
-                    airportName: '-',
-                    driverInfo: driverInfo,
-                    tapeQuantity: 0
-                };
-            }
-
-            if (!productsByDriver[driverName].driverInfo && driverName !== 'Unassigned') {
-                const did = resolveDriverDid(drivers, driverName);
-                productsByDriver[driverName].driverInfo =
-                    drivers.find((d) => String(d.did) === String(did)) ||
-                    drivers.find((d) => (d.driver_name || '').toLowerCase() === driverName.toLowerCase()) ||
-                    { mobile_number: '', vehicle_number: '' };
-            }
-
-            const split = getSplitWeightForRow(item, weightSplitMap);
-            const displayKg = split.displayKg;
-            const netWeight = split.netKg > 0 ? split.netKg : split.grossKg;
-
-            const productKey = normalizeProductName(product);
-            const pricePerKg = stage4PriceByProduct[productKey] || 0;
-            const productTotal = pricePerKg * netWeight;
-            const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
-
-            if (productsByDriver[driverName].airportName === '-') {
-                productsByDriver[driverName].airportName = item.airportName || item.airport_name || '-';
-            }
-
-            productsByDriver[driverName].products.push({
-                product: product,
-                grossWeight: displayKg,
-                netWeight,
-                rate: pricePerKg,
-                amount: productTotal,
-                box: noOfPkgs,
-                ct: item.ct || item.CT,
-                labour: item.labour || item.labourName || stage2LabourMap[product],
-                packingType: item.packingType || item.packing_type || '',
-                sNo: productsByDriver[driverName].products.length + 1
-            });
-
-            productsByDriver[driverName].totalAmount += productTotal;
-            productsByDriver[driverName].totalWeight += displayKg;
-            productsByDriver[driverName].totalBoxes += noOfPkgs;
+        return buildStage3GvtReportCards({
+            deliveryData,
+            drivers,
+            order,
+            stage2LabourMap,
+            weightSplitMap,
+            stage4PriceByProduct,
+            summaryAirportGroups,
+            airportTapeData,
+            assignment,
+            labourRates,
+            excessKmRecords,
+            driverRates,
+            fuelExpenses,
         });
-
-        assignStage4NetToDrivers(productsByDriver);
-
-        // Attach airportCode from Airport Delivery Summary (prefer stage3_summary_data.airportGroups so backend-saved codes show)
-        const groupsForCode = Object.keys(summaryAirportGroups || {}).length ? summaryAirportGroups : airportGroups;
-        Object.values(productsByDriver).forEach(driverData => {
-            const airportName = driverData.airportName || '';
-            for (const [code, ag] of Object.entries(groupsForCode)) {
-                if (ag && (ag.airportName || '').toLowerCase() === airportName.toLowerCase()) {
-                    driverData.airportCode = code;
-                    break;
-                }
-            }
-        });
-
-        // Helper: get total tape quantity from airport group (supports single tape or tapes array)
-        const getTapeQtyFromAirportGroup = (ag) => {
-            if (Array.isArray(ag.tapes) && ag.tapes.length > 0) {
-                return ag.tapes.reduce((sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0), 0);
-            }
-            return parseFloat(ag.tapeQuantity || ag.tapeQty || 0) || 0;
-        };
-        // Helper: get total tape quantity from airportTapeData (value can be array of tapes or single object)
-        const getTapeQtyFromTapeData = (tapeInfo) => {
-            if (Array.isArray(tapeInfo)) {
-                return tapeInfo.reduce((sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0), 0);
-            }
-            if (tapeInfo && typeof tapeInfo === 'object') {
-                return parseFloat(tapeInfo.tapeQuantity || tapeInfo.tapeQty || 0) || 0;
-            }
-            return 0;
-        };
-
-        // Attach tape quantity per driver based on airport groups (stage3_summary_data)
-        Object.values(productsByDriver).forEach(driverData => {
-            const airportName = driverData.airportName;
-            let qty = 0;
-
-            // 1) Try to read from stage3_summary_data.airportGroups (supports multiple tapes per airport)
-            if (summaryAirportGroups && typeof summaryAirportGroups === 'object') {
-                for (const ag of Object.values(summaryAirportGroups)) {
-                    if (!ag) continue;
-                    if ((ag.airportName || '').toLowerCase() === (airportName || '').toLowerCase()) {
-                        qty = getTapeQtyFromAirportGroup(ag);
-                        break;
-                    }
-                }
-            }
-
-            // 2) Fallback to stage3_data.airportTapeData by airport name (can be array of tapes)
-            if (!qty && airportTapeData && typeof airportTapeData === 'object') {
-                qty = getTapeQtyFromTapeData(airportTapeData[airportName]);
-            }
-
-            driverData.tapeQuantity = qty;
-        });
-
-        const stage2LabourWageMap = buildStage2LabourWageMap(assignment);
-
-        Object.entries(productsByDriver).forEach(([driverNameKey, driverData]) => {
-            const driverRef =
-                driverData.driverInfo?.did ||
-                driverData.driverInfo?.driver_id ||
-                driverData.driverInfo?.driver_name ||
-                driverNameKey;
-            driverData.localOrder = getDriverPayoutExcessForReport(
-                driverRef,
-                order?.order_received_date,
-                excessKmRecords,
-                driverRates,
-                fuelExpenses,
-                drivers
-            );
-            const { rows, labourCost } = computeLabourExpenseForProducts(
-                driverData.products,
-                stage2LabourWageMap,
-                labourRates
-            );
-            driverData.labourRows = rows;
-            driverData.labourCost = labourCost;
-        });
-
-        return productsByDriver;
     }, [assignment, drivers, driverRates, excessKmRecords, labourRates, assignment?.stage2_data, assignment?.stage2_summary_data, assignment?.stage3_data, assignment?.stage4_data, fuelExpenses, order]);
 
     const handleExportPDF = () => {
@@ -761,7 +816,9 @@ const ReportOrderView = () => {
             return isNaN(num) ? 0 : num;
         };
 
-        Object.entries(processedReportData).forEach(([driverName, data], index) => {
+        Object.entries(processedReportData)
+            .sort(([codeA], [codeB]) => codeA.localeCompare(codeB))
+            .forEach(([driverName, data], index) => {
             if (finalY > 235) { doc.addPage(); finalY = 20; }
 
             doc.setFillColor(236, 253, 245);
@@ -775,7 +832,7 @@ const ReportOrderView = () => {
             doc.setFont(undefined, 'normal');
             doc.setFontSize(9);
             doc.text(cleanText(data.airportName || 'Airport'), 190, finalY + 6, { align: 'right' });
-            let drvTxt = cleanText(driverName);
+            let drvTxt = cleanText(data.driverName || driverName);
             if (data.driverInfo?.vehicle_number) drvTxt += ` ${cleanText(data.driverInfo.vehicle_number)}`;
             doc.setFontSize(8);
             doc.text(drvTxt, 190, finalY + 12, { align: 'right' });
@@ -1013,7 +1070,9 @@ const ReportOrderView = () => {
             return isNaN(num) ? 0 : num;
         };
 
-        Object.entries(processedReportData).forEach(([driverName, data], index) => {
+        Object.entries(processedReportData)
+            .sort(([codeA], [codeB]) => codeA.localeCompare(codeB))
+            .forEach(([driverName, data], index) => {
             // Calculations
             let count10kg = 0, count5kg = 0, countThermo = 0, countNetBag = 0;
             data.products.forEach(p => {
@@ -1041,7 +1100,7 @@ const ReportOrderView = () => {
 
             // Rows
             allRows.push([{ v: `${dayName} | ${fullDate}`, s: { fill: { fgColor: { rgb: "F9FAFB" } }, font: { bold: true } } }, cell(data.airportCode || 'GVT'), cell(data.airportName || 'Airport'), '', '', '']); currentRow++;
-            allRows.push([cell(dayName), cell(`00${index + 1}`), cell(`${driverName} ${data.driverInfo?.vehicle_number ? '(' + data.driverInfo.vehicle_number + ')' : ''}`), '', '', '']); currentRow++;
+            allRows.push([cell(dayName), cell(`00${index + 1}`), cell(`${data.driverName || driverName} ${data.driverInfo?.vehicle_number ? '(' + data.driverInfo.vehicle_number + ')' : ''}`), '', '', '']); currentRow++;
             allRows.push([]); currentRow++;
 
             allRows.push([cell('S.N', 'header'), cell('Box', 'header'), cell('Product', 'header'), cell('Kgs', 'header'), cell('Rate', 'header'), cell('Amount', 'header')]); currentRow++;
@@ -1703,230 +1762,24 @@ const ReportOrderView = () => {
                             <h2 className="text-xl font-bold">Stage 3: Delivery Routes</h2>
                         </div>
                         <div className="p-4 bg-gray-50">
-                            {assignment && assignment.stage3_data ? (
+                            {assignment && assignment.stage3_data && processedReportData ? (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                                     {(() => {
-                                        let stage3Data = typeof assignment.stage3_data === 'string' ? JSON.parse(assignment.stage3_data) : assignment.stage3_data;
-                                        let deliveryData = stage3Data.products || [];
-                                        const airportGroups = stage3Data.summaryData?.airportGroups || {};
-                                        // Prefer stage3_summary_data.airportGroups (backend may save codes there)
-                                        let summaryAirportGroupsHtml = airportGroups;
-                                        if (assignment.stage3_summary_data) {
-                                            try {
-                                                const s3 = typeof assignment.stage3_summary_data === 'string' ? JSON.parse(assignment.stage3_summary_data) : assignment.stage3_summary_data;
-                                                if (s3?.airportGroups && Object.keys(s3.airportGroups).length) summaryAirportGroupsHtml = s3.airportGroups;
-                                            } catch (e) { /* ignore */ }
-                                        }
-
-                                        // Get Stage 4 pricing data
-                                        let stage4ProductRows = [];
-                                        if (assignment.stage4_data) {
-                                            let stage4Data = typeof assignment.stage4_data === 'string' ? JSON.parse(assignment.stage4_data) : assignment.stage4_data;
-                                            stage4ProductRows = stage4Data.reviewData?.productRows || stage4Data.productRows || [];
-                                        }
-                                        const { netByProduct: stage4NetByProductHtml, priceByProduct: stage4PriceByProductHtml } = buildStage4Maps(stage4ProductRows);
-
-                                        // Prepare Stage 2 Labour Map from stage2_data (PRIMARY SOURCE)
-                                        let stage2LabourMap = {};
-                                        // Map of labour name -> wage/totalAmount from Stage 2 summary
-                                        let stage2LabourWageMap = {};
-
-                                        // Parse stage2_data first
-                                        if (assignment.stage2_data) {
-                                            try {
-                                                let s2Data = typeof assignment.stage2_data === 'string' ? JSON.parse(assignment.stage2_data) : assignment.stage2_data;
-                                                let s2Assignments = s2Data.productAssignments || s2Data.stage2Assignments || s2Data.assignments || [];
-                                                s2Assignments.forEach(s2Item => {
-                                                    const pName = s2Item.product || s2Item.productName;
-                                                    const pLabour = s2Item.labourName || s2Item.labourNames || s2Item.labour;
-                                                    if (pName && pLabour) {
-                                                        stage2LabourMap[pName] = pLabour;
-                                                    }
-                                                });
-                                                console.log('Stage 2 Labour Map from stage2_data (HTML):', stage2LabourMap);
-                                            } catch (e) {
-                                                console.error("Error parsing stage2_data in HTML view", e);
-                                            }
-                                        }
-
-                                        // Use stage2_summary_data to (a) backfill labour names if needed and
-                                        // (b) ALWAYS load individual labour wages that were saved in Stage 2.
-                                        if (assignment.stage2_summary_data) {
-                                            try {
-                                                let s2SummaryData = typeof assignment.stage2_summary_data === 'string'
-                                                    ? JSON.parse(assignment.stage2_summary_data)
-                                                    : assignment.stage2_summary_data;
-
-                                                const labourAssignments = s2SummaryData.labourAssignments || [];
-                                                const labourPrices = s2SummaryData.labourPrices || [];
-
-                                                // 1) If we DID NOT get product→labour mapping from stage2_data,
-                                                //    backfill it from summary_data (same logic as before)
-                                                if (Object.keys(stage2LabourMap).length === 0 && labourAssignments.length > 0) {
-                                                    labourAssignments.forEach(labourGroup => {
-                                                        const labourName = labourGroup.labour;
-                                                        const assignments = labourGroup.assignments || [];
-
-                                                        assignments.forEach(assignment => {
-                                                            const productId = assignment.oiid;
-                                                            const productName = assignment.product;
-
-                                                            if (productId && labourName) {
-                                                                if (!stage2LabourMap[productId]) {
-                                                                    stage2LabourMap[productId] = [];
-                                                                }
-                                                                if (!stage2LabourMap[productId].includes(labourName)) {
-                                                                    stage2LabourMap[productId].push(labourName);
-                                                                }
-                                                            }
-
-                                                            // Also map by product name for fallback
-                                                            if (productName && labourName) {
-                                                                if (!stage2LabourMap[productName]) {
-                                                                    stage2LabourMap[productName] = [];
-                                                                }
-                                                                if (!stage2LabourMap[productName].includes(labourName)) {
-                                                                    stage2LabourMap[productName].push(labourName);
-                                                                }
-                                                            }
-                                                        });
-                                                    });
-
-                                                    // Convert arrays to comma-separated strings
-                                                    Object.keys(stage2LabourMap).forEach(key => {
-                                                        if (Array.isArray(stage2LabourMap[key])) {
-                                                            stage2LabourMap[key] = stage2LabourMap[key].join(', ');
-                                                        }
-                                                    });
-
-                                                    console.log('Stage 2 Labour Map from summary (HTML fallback):', stage2LabourMap);
-                                                }
-
-                                                // 2) Always build a labour → wage map from summary_data.labourPrices
-                                                labourPrices.forEach(lp => {
-                                                    const labourName = lp.labourName || lp.labour;
-                                                    if (!labourName) return;
-
-                                                    // Prefer totalAmount (includes excess etc.) then labourWage
-                                                    const wage =
-                                                        parseFloat(lp.totalAmount ?? lp.labourWage ?? 0) || 0;
-                                                    stage2LabourWageMap[labourName] = wage;
-                                                });
-
-                                            } catch (e) {
-                                                console.error("Error parsing stage2_summary_data in HTML view", e);
-                                            }
-                                        }
-
-                                        // Group products by driver
-                                        let productsByDriver = {};
-                                        const weightSplitMapHtml = buildStage3WeightSplitMap(
-                                            deliveryData,
-                                            order?.items || [],
-                                            stage4NetByProductHtml
-                                        );
-                                        deliveryData.forEach((item) => {
-                                            const product = item.product || item.productName || '-';
-                                            let driverName = '';
-                                            let driverInfo = null;
-
-                                            // 1. Try to get driver from direct ID (most reliable)
-                                            if (item.selectedDriver) {
-                                                // items.selectedDriver is likely a string or number ID
-                                                driverInfo = drivers.find(d => d.did == item.selectedDriver || d.driver_id == item.selectedDriver);
-                                                if (driverInfo) {
-                                                    driverName = driverInfo.driver_name;
-                                                }
-                                            }
-
-                                            // 2. Fallback: Check if item has driver name directly
-                                            if (!driverName && (item.driver || item.driverName)) {
-                                                driverName = item.driver || item.driverName;
-                                            }
-
-                                            // 3. Fallback: Find driver from airportGroups
-                                            if (!driverName) {
-                                                for (const [airportCode, airportData] of Object.entries(airportGroups)) {
-                                                    const productInGroup = airportData.products?.find(p =>
-                                                        (p.product || p.productName) === product
-                                                    );
-                                                    if (productInGroup) {
-                                                        driverName = productInGroup.driver || '';
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            if (!driverName) driverName = 'Unassigned';
-
-                                            if (!productsByDriver[driverName]) {
-                                                productsByDriver[driverName] = {
-                                                    products: [],
-                                                    totalAmount: 0,
-                                                    totalWeight: 0,
-                                                    totalBoxes: 0,
-                                                    airportName: '-',
-                                                    driverInfo: driverInfo
-                                                };
-                                            }
-
-                                            // Ensure driverInfo is populated if we found the name but not the object yet
-                                            if (!productsByDriver[driverName].driverInfo && driverName !== 'Unassigned') {
-                                                productsByDriver[driverName].driverInfo = drivers.find(d => d.driver_name === driverName) || { mobile_number: '', vehicle_number: '' };
-                                            }
-
-                                            const split = getSplitWeightForRow(item, weightSplitMapHtml);
-                                            const displayKg = split.displayKg;
-                                            const netWeight = split.netKg > 0 ? split.netKg : split.grossKg;
-
-                                            const productKey = normalizeProductName(product);
-                                            const pricePerKg = stage4PriceByProductHtml[productKey] || 0;
-                                            const productTotal = pricePerKg * netWeight;
-                                            const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
-
-                                            if (productsByDriver[driverName].airportName === '-') {
-                                                productsByDriver[driverName].airportName = item.airportName || item.airport_name || '-';
-                                            }
-
-                                            productsByDriver[driverName].products.push({
-                                                product: product,
-                                                grossWeight: displayKg,
-                                                netWeight,
-                                                rate: pricePerKg,
-                                                amount: productTotal,
-                                                box: noOfPkgs,
-                                                ct: item.ct || item.CT,
-                                                labour: item.labour || item.labourName || stage2LabourMap[product],
-                                                packingType: item.packingType || item.packing_type || '',
-                                                sNo: productsByDriver[driverName].products.length + 1
-                                            });
-
-                                            productsByDriver[driverName].totalAmount += productTotal;
-                                            productsByDriver[driverName].totalWeight += displayKg;
-                                            productsByDriver[driverName].totalBoxes += noOfPkgs;
-                                        });
-
-                                        assignStage4NetToDrivers(productsByDriver);
-
                                         const orderDate = new Date(order.order_received_date);
                                         const dayName = orderDate.toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
-                                        const shortDate = orderDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }).replace(/ /g, '/'); // 1/Oct/24
-                                        const fullDate = orderDate.toLocaleDateString('en-GB'); // 01/10/2024
-                                        
-                                        // Helper function to get fuel expense for a driver on a specific date
+                                        const shortDate = orderDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }).replace(/ /g, '/');
+
                                         const getFuelExpenseForDriver = (driverId, date) => {
                                             if (!driverId || !date || !fuelExpenses || fuelExpenses.length === 0) return 0;
-                                            
+
                                             const expenseDate = new Date(date).toISOString().split('T')[0];
                                             const matchingExpenses = fuelExpenses.filter(expense => {
                                                 const expenseDriverId = expense.driver_id || expense.did || expense.driver?.did || expense.driver?.driver_id;
                                                 const expenseDateStr = expense.date ? new Date(expense.date).toISOString().split('T')[0] : '';
                                                 return expenseDriverId == driverId && expenseDateStr === expenseDate;
                                             });
-                                            
-                                            // Sum all fuel expenses for this driver on this date
+
                                             return matchingExpenses.reduce((sum, expense) => {
-                                                // Calculate total from unit_price and litre if total_amount is not available
                                                 let total = parseFloat(expense.total_amount || expense.total || 0);
                                                 if (!total || isNaN(total)) {
                                                     const unitPrice = parseFloat(expense.unit_price || 0);
@@ -1937,19 +1790,10 @@ const ReportOrderView = () => {
                                             }, 0);
                                         };
 
-                                        // Attach airportCode from Airport Delivery Summary (prefer stage3_summary_data so backend-saved codes show)
-                                        const groupsForCodeHtml = Object.keys(summaryAirportGroupsHtml).length ? summaryAirportGroupsHtml : airportGroups;
-                                        Object.values(productsByDriver).forEach(driverData => {
-                                            const airportName = driverData.airportName || '';
-                                            for (const [code, ag] of Object.entries(groupsForCodeHtml)) {
-                                                if (ag && (ag.airportName || '').toLowerCase() === airportName.toLowerCase()) {
-                                                    driverData.airportCode = code;
-                                                    break;
-                                                }
-                                            }
-                                        });
-
-                                        return Object.entries(productsByDriver).map(([driverName, data], index) => {
+                                        return Object.entries(processedReportData)
+                                            .sort(([codeA], [codeB]) => codeA.localeCompare(codeB))
+                                            .map(([gvtKey, data], index) => {
+                                            const driverName = data.driverName || gvtKey;
                                             // 1. Calculations & Prep
                                             const getStockPrice = (query) => {
                                                 const item = stockItems.find(i =>
@@ -2005,70 +1849,20 @@ const ReportOrderView = () => {
 
                                             const pickupCost = getStockPrice('pickup') || 0;
                                             const tapeUnitPrice = getStockPrice('tape') || 0;
-                                            const tapeQuantity = (() => {
-                                                const airportName = data.airportName;
-                                                const getTapeQtyFromAg = (ag) => {
-                                                    if (Array.isArray(ag.tapes) && ag.tapes.length > 0) {
-                                                        return ag.tapes.reduce((sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0), 0);
-                                                    }
-                                                    return parseFloat(ag.tapeQuantity || ag.tapeQty || 0) || 0;
-                                                };
-                                                const getTapeQtyFromTapeData = (info) => {
-                                                    if (Array.isArray(info)) {
-                                                        return info.reduce((sum, t) => sum + (parseFloat(t.tapeQuantity || t.tapeQty || 0) || 0), 0);
-                                                    }
-                                                    if (info && typeof info === 'object') {
-                                                        return parseFloat(info.tapeQuantity || info.tapeQty || 0) || 0;
-                                                    }
-                                                    return 0;
-                                                };
-
-                                                // 1) Try to read from stage3_summary_data.airportGroups (supports multiple tapes)
-                                                if (assignment.stage3_summary_data) {
-                                                    try {
-                                                        const s3Summary = typeof assignment.stage3_summary_data === 'string'
-                                                            ? JSON.parse(assignment.stage3_summary_data)
-                                                            : assignment.stage3_summary_data;
-                                                        const ags = s3Summary?.airportGroups || {};
-                                                        for (const ag of Object.values(ags)) {
-                                                            if (!ag) continue;
-                                                            if ((ag.airportName || '').toLowerCase() === (airportName || '').toLowerCase()) {
-                                                                const q = getTapeQtyFromAg(ag);
-                                                                if (q) return q;
-                                                            }
-                                                        }
-                                                    } catch (e) {
-                                                        console.error('Error parsing stage3_summary_data in HTML view (tapeQuantity)', e);
-                                                    }
-                                                }
-
-                                                // 2) Fallback to stage3_data.airportTapeData by airport name (can be array of tapes)
-                                                return getTapeQtyFromTapeData((stage3Data.airportTapeData || {})[airportName]);
-                                            })();
+                                            const tapeQuantity = parseFloat(data.tapeQuantity || 0) || 0;
                                             const paperPrice = 0;
                                             const tapeCost = tapeUnitPrice * tapeQuantity + paperPrice;
 
-                                            // Dynamic Driver Wage (Relaxed Match)
                                             const driverRateObj = driverRates.find(r => r.deliveryType?.toLowerCase().includes('airport') && r.status === 'Active')
                                                 || driverRates.find(r => r.status === 'Active');
                                             const driverWage = driverRateObj ? parseFloat(driverRateObj.amount) : 0;
 
                                             const driverId = data.driverInfo?.did || data.driverInfo?.driver_id || null;
                                             const fuelExpense = driverId ? getFuelExpenseForDriver(driverId, order.order_received_date) : 0;
-                                            const localOrder = getDriverPayoutExcessForReport(
-                                                driverId || data.driverInfo?.driver_name,
-                                                order.order_received_date,
-                                                excessKmRecords,
-                                                driverRates,
-                                                fuelExpenses,
-                                                drivers
-                                            );
+                                            const localOrder = data.localOrder || { amount: 0 };
                                             const localOrderAmount = localOrder.amount || 0;
-                                            const { rows: labourRows, labourCost } = computeLabourExpenseForProducts(
-                                                data.products,
-                                                stage2LabourWageMap,
-                                                labourRates
-                                            );
+                                            const labourRows = data.labourRows || [];
+                                            const labourCost = data.labourCost || 0;
 
                                             const totalOverhead =
                                                 pickupCost + tapeCost + driverWage + fuelExpense + localOrderAmount + labourCost;
@@ -2085,7 +1879,7 @@ const ReportOrderView = () => {
 
                                             // Simple Table UI (1st PDF Style)
                                             return (
-                                                <div key={index} className="bg-white border text-xs font-mono mb-8 page-break-inside-avoid w-full">
+                                                <div key={gvtKey} className="bg-white border text-xs font-mono mb-8 page-break-inside-avoid w-full">
                                                     {/* Header */}
                                                     <div className="border-b border-black p-2 flex justify-between items-center bg-gray-50">
                                                         <div className="font-bold">{dayName} | {shortDate}</div>
