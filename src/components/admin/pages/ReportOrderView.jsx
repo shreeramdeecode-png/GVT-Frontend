@@ -119,15 +119,11 @@ export function resolveAirportCodeForDeliveryRow(row, summaryAirportGroups, deli
     const rowId = getStage3DeliveryRowId(row);
     for (const [code, ag] of Object.entries(summaryAirportGroups || {})) {
         if (ag?.rowId != null && String(ag.rowId) === String(rowId)) return code;
+        if (Array.isArray(ag?.rowIds) && ag.rowIds.some((id) => String(id) === String(rowId))) return code;
+        if (Array.isArray(ag?.products) && ag.products.some((p) => String(p.rowId) === String(rowId))) return code;
     }
     const gvtCodeByRowId = buildGvtCodeByRowId(deliveryData, customerName);
     if (row?.id != null && gvtCodeByRowId[row.id]) return gvtCodeByRowId[row.id];
-    const gvtRows = getGvtDeliveryRows(deliveryData);
-    const idx = gvtRows.indexOf(row);
-    if (idx >= 0) {
-        const prefix = getGvtCustomerPrefix(customerName);
-        return `${prefix}${String(idx + 1).padStart(3, '0')}`;
-    }
     return null;
 }
 
@@ -182,19 +178,16 @@ const resolveDriverForDeliveryRow = (item, drivers, airportGroups) => {
     return { driverName, driverInfo };
 };
 
-const getTapeQtyForGvtRow = (summaryAirportGroups, rowId, airportTapeData) => {
-    for (const ag of Object.values(summaryAirportGroups || {})) {
-        if (ag?.rowId != null && String(ag.rowId) === String(rowId)) {
-            return getTapeQtyFromAirportGroup(ag);
-        }
-    }
-    if (rowId != null && airportTapeData?.[rowId] != null) {
-        return getTapeQtyFromTapeData(airportTapeData[rowId]);
+const getTapeQtyForGvtCard = (summaryAirportGroups, airportCode, airportTapeData) => {
+    const ag = summaryAirportGroups?.[airportCode];
+    if (ag) return getTapeQtyFromAirportGroup(ag);
+    if (airportCode && airportTapeData?.[airportCode] != null) {
+        return getTapeQtyFromTapeData(airportTapeData[airportCode]);
     }
     return 0;
 };
 
-/** One GVT bill card per split delivery row (matches Stage 3 assign UI). */
+/** GVT bill cards grouped by GVT code (matches Stage 3 assign UI). */
 export function buildStage3GvtReportCards({
     deliveryData,
     drivers,
@@ -215,10 +208,10 @@ export function buildStage3GvtReportCards({
     const groupsForCode = Object.keys(summaryAirportGroups || {}).length
         ? summaryAirportGroups
         : {};
+    const gvtCodeByRowId = buildGvtCodeByRowId(deliveryData, customerName);
 
     getGvtDeliveryRows(deliveryData).forEach((item, index) => {
         const product = item.product || item.productName || '-';
-        const rowId = getStage3DeliveryRowId(item);
         const { driverName, driverInfo } = resolveDriverForDeliveryRow(
             item,
             drivers,
@@ -231,7 +224,7 @@ export function buildStage3GvtReportCards({
                 summaryAirportGroups,
                 deliveryData,
                 customerName
-            ) || `GVT${String(index + 1).padStart(3, '0')}`;
+            ) || gvtCodeByRowId[item.id] || `GVT${String(index + 1).padStart(3, '0')}`;
 
         const split = getSplitWeightForRow(item, weightSplitMap);
         const displayKg = split.displayKg;
@@ -242,29 +235,37 @@ export function buildStage3GvtReportCards({
         const productTotal = pricePerKg * netWeight;
         const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0);
 
-        productsByGvt[airportCode] = {
-            driverName,
-            products: [{
-                product,
-                grossWeight: displayKg,
-                netWeight,
-                rate: pricePerKg,
-                amount: productTotal,
-                box: noOfPkgs,
-                ct: item.ct || item.CT,
-                labour: item.labour || item.labourName || stage2LabourMap[product],
-                packingType: item.packingType || item.packing_type || '',
-                sNo: 1,
-            }],
-            totalAmount: productTotal,
-            totalWeight: displayKg,
-            totalBoxes: noOfPkgs,
-            airportName: item.airportName || item.airport_name || '-',
-            airportCode,
-            driverInfo,
-            tapeQuantity: getTapeQtyForGvtRow(summaryAirportGroups, rowId, airportTapeData),
-            rowId,
+        const productEntry = {
+            product,
+            grossWeight: displayKg,
+            netWeight,
+            rate: pricePerKg,
+            amount: productTotal,
+            box: noOfPkgs,
+            ct: item.ct || item.CT,
+            labour: item.labour || item.labourName || stage2LabourMap[product],
+            packingType: item.packingType || item.packing_type || '',
+            sNo: (productsByGvt[airportCode]?.products?.length || 0) + 1,
         };
+
+        if (!productsByGvt[airportCode]) {
+            productsByGvt[airportCode] = {
+                driverName,
+                products: [productEntry],
+                totalAmount: productTotal,
+                totalWeight: displayKg,
+                totalBoxes: noOfPkgs,
+                airportName: item.airportName || item.airport_name || '-',
+                airportCode,
+                driverInfo,
+                tapeQuantity: getTapeQtyForGvtCard(summaryAirportGroups, airportCode, airportTapeData),
+            };
+        } else {
+            productsByGvt[airportCode].products.push(productEntry);
+            productsByGvt[airportCode].totalAmount += productTotal;
+            productsByGvt[airportCode].totalWeight += displayKg;
+            productsByGvt[airportCode].totalBoxes += noOfPkgs;
+        }
     });
 
     assignStage4NetToDrivers(productsByGvt);

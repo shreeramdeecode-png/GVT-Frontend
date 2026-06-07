@@ -1330,16 +1330,15 @@ const FlowerOrderAssignStage3 = () => {
             </div>
             <div>
               <h2 className="text-lg font-bold text-gray-900">Airport Delivery Summary</h2>
-              <p className="text-sm text-gray-600">One GVT card per split delivery</p>
+              <p className="text-sm text-gray-600">Same location shares GVT; same product splits get separate GVT</p>
             </div>
           </div>
 
           {/* Desktop Summary */}
           <div className="hidden lg:block space-y-6">
             {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
-              const product = card.product;
-              const groupKey = product.id;
-              const airportCode = product.sequentialCode || '-';
+              const groupKey = card.tapeKey || card.airportCode;
+              const airportCode = card.airportCode || '-';
 
               return (
                 <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
@@ -1349,7 +1348,7 @@ const FlowerOrderAssignStage3 = () => {
                         <Truck className="w-6 h-6" />
                         <div>
                           <h3 className="text-lg font-bold">{card.driverKey}</h3>
-                          <p className="text-sm text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
+                          <p className="text-sm text-emerald-100">{card.products.length} Product{card.products.length !== 1 ? 's' : ''} • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
                       </div>
                       {airportCode !== '-' && (
@@ -1373,7 +1372,8 @@ const FlowerOrderAssignStage3 = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        <tr className="hover:bg-emerald-50 transition-colors">
+                        {card.products.map((product) => (
+                        <tr key={product.id} className="hover:bg-emerald-50 transition-colors">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
@@ -1420,6 +1420,7 @@ const FlowerOrderAssignStage3 = () => {
                             </select>
                           </td>
                         </tr>
+                        ))}
                       </tbody>
                       <tbody>
                         <tr>
@@ -1430,8 +1431,8 @@ const FlowerOrderAssignStage3 = () => {
                                   <span className="text-xs font-bold text-blue-600">{airportCode}</span>
                                   <MapPin className="w-3 h-3 text-gray-400" />
                                 </div>
-                                <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
-                                <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
+                                <p className="text-xs text-gray-600 font-medium">{card.airportName}</p>
+                                <p className="text-xs text-gray-500">{card.totalPackages} pkgs • {card.products.length} product(s)</p>
                               </div>
                               <div className="space-y-3">
                                 {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
@@ -1510,9 +1511,8 @@ const FlowerOrderAssignStage3 = () => {
           {/* Mobile Summary */}
           <div className="lg:hidden space-y-6">
             {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
-              const product = card.product;
-              const groupKey = product.id;
-              const airportCode = product.sequentialCode || '-';
+              const groupKey = card.tapeKey || card.airportCode;
+              const airportCode = card.airportCode || '-';
 
               return (
                 <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
@@ -1522,7 +1522,7 @@ const FlowerOrderAssignStage3 = () => {
                         <Truck className="w-5 h-5" />
                         <div>
                           <h3 className="text-base font-bold">{card.driverKey}</h3>
-                          <p className="text-xs text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
+                          <p className="text-xs text-emerald-100">{card.products.length} Product{card.products.length !== 1 ? 's' : ''} • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
                       </div>
                       {airportCode !== '-' && (
@@ -1532,7 +1532,8 @@ const FlowerOrderAssignStage3 = () => {
                   </div>
 
                   <div className="p-4 space-y-3">
-                    <div className="border border-gray-200 rounded-lg p-3">
+                    {card.products.map((product) => (
+                    <div key={product.id} className="border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center gap-2 mb-1">
                         <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
                         <span className="text-sm font-semibold text-gray-900">{product.product}</span>
@@ -1583,6 +1584,7 @@ const FlowerOrderAssignStage3 = () => {
                         </div>
                       </div>
                     </div>
+                    ))}
 
                     <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
                       <div className="border-2 border-blue-200 rounded-lg p-3 bg-white">
@@ -1591,8 +1593,8 @@ const FlowerOrderAssignStage3 = () => {
                             <span className="text-xs font-bold text-blue-600">{airportCode}</span>
                             <MapPin className="w-3 h-3 text-gray-400" />
                           </div>
-                          <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
-                          <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
+                          <p className="text-xs text-gray-600 font-medium">{card.airportName}</p>
+                          <p className="text-xs text-gray-500">{card.totalPackages} pkgs • {card.products.length} product(s)</p>
                         </div>
                         <div className="space-y-3">
                           {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
@@ -1871,7 +1873,7 @@ export function assignDriverNetFromSplitProducts(productsByDriver) {
   });
 }
 
-/** One GVT per split row (order-wide), even when airport/location is the same. */
+/** GVT prefix from customer name (e.g. GVTPLAINTAPE). */
 export const getGvtCustomerPrefix = (customerName) =>
   (String(customerName || '').replace(/\d+$/, '').trim() || customerName || 'CT').replace(/\s+/g, '');
 
@@ -1881,14 +1883,63 @@ export const isGvtDeliveryRow = (row) =>
 export const getGvtDeliveryRows = (productRows) =>
   (productRows || []).filter(isGvtDeliveryRow);
 
+export const getGvtLocationDriverKey = (row) => {
+  const airport = String(row.airportName || row.airport_name || '').trim().toLowerCase();
+  const driver = String(row.selectedDriver || row.driver || '');
+  return `${airport}|${driver}`;
+};
+
+export const getGvtOiid = (row) => {
+  if (row?.oiid != null) return String(row.oiid);
+  const id = row?.id;
+  if (id != null) return String(id).split('-')[0];
+  return '';
+};
+
+/**
+ * GVT codes:
+ * - Same product split at same location+driver → separate GVT per split row
+ * - Different products at same location+driver → share the first GVT for that route
+ */
 export const buildGvtCodeByRowId = (productRows, customerName) => {
   const prefix = getGvtCustomerPrefix(customerName);
+  const gvtRows = getGvtDeliveryRows(productRows);
+  const splitCountByOiidLocation = {};
+
+  gvtRows.forEach((row) => {
+    const key = `${getGvtOiid(row)}|${getGvtLocationDriverKey(row)}`;
+    splitCountByOiidLocation[key] = (splitCountByOiidLocation[key] || 0) + 1;
+  });
+
+  let nextGvtIndex = 1;
+  const locationDriverToFirstGvtCode = {};
+  const oiidLocationSplitIndex = {};
   const map = {};
-  getGvtDeliveryRows(productRows).forEach((row, index) => {
-    if (row.id != null) {
-      map[row.id] = `${prefix}${String(index + 1).padStart(3, '0')}`;
+
+  gvtRows.forEach((row) => {
+    if (row.id == null) return;
+
+    const locKey = getGvtLocationDriverKey(row);
+    const splitKey = `${getGvtOiid(row)}|${locKey}`;
+    const isProductSplitAtLocation = (splitCountByOiidLocation[splitKey] || 0) > 1;
+
+    if (isProductSplitAtLocation) {
+      const code = `${prefix}${String(nextGvtIndex++).padStart(3, '0')}`;
+      map[row.id] = code;
+      const splitIdx = (oiidLocationSplitIndex[splitKey] || 0) + 1;
+      oiidLocationSplitIndex[splitKey] = splitIdx;
+      if (splitIdx === 1) {
+        locationDriverToFirstGvtCode[locKey] = code;
+      }
+    } else if (locationDriverToFirstGvtCode[locKey]) {
+      map[row.id] = locationDriverToFirstGvtCode[locKey];
+    } else {
+      const code = `${prefix}${String(nextGvtIndex++).padStart(3, '0')}`;
+      map[row.id] = code;
+      locationDriverToFirstGvtCode[locKey] = code;
     }
   });
+
   return map;
 };
 
@@ -1936,70 +1987,119 @@ export const loadTapeDataFromAirportGroups = (airportGroups) => {
   return tapeFromGroups;
 };
 
+const resolveTapeForGvtGroup = (airportCode, rows, airportTapeData) => {
+  if (airportTapeData[airportCode]) return airportTapeData[airportCode];
+  for (const row of rows) {
+    if (airportTapeData[row.id]) return airportTapeData[row.id];
+  }
+  const airportName = rows[0]?.airportName;
+  if (airportName && airportTapeData[airportName]) return airportTapeData[airportName];
+  return null;
+};
+
 export const buildAirportGroupsFromProductRows = (
   productRows,
   customerName,
   airportTapeData = {},
   drivers = []
 ) => {
-  const prefix = getGvtCustomerPrefix(customerName);
   const gvtRows = getGvtDeliveryRows(productRows);
+  const gvtCodeByRowId = buildGvtCodeByRowId(productRows, customerName);
+  const rowsByCode = {};
+
+  gvtRows.forEach((row) => {
+    const code = gvtCodeByRowId[row.id];
+    if (!code) return;
+    if (!rowsByCode[code]) rowsByCode[code] = [];
+    rowsByCode[code].push(row);
+  });
+
   const airportGroups = {};
 
-  gvtRows.forEach((row, index) => {
-    const airportCode = `${prefix}${String(index + 1).padStart(3, '0')}`;
-    const rawTape = airportTapeData[row.id] ?? airportTapeData[row.airportName];
-    const tapesArray = normalizeTapeEntries(rawTape);
-    const firstTape = tapesArray[0] || {};
-    const driver = drivers.find((d) => d.did === parseInt(row.selectedDriver, 10));
+  Object.entries(rowsByCode)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([airportCode, rows]) => {
+      const primaryRow = rows[0];
+      const rawTape = resolveTapeForGvtGroup(airportCode, rows, airportTapeData);
+      const tapesArray = normalizeTapeEntries(rawTape);
+      const firstTape = tapesArray[0] || {};
 
-    airportGroups[airportCode] = {
-      airportCode,
-      rowId: row.id,
-      assignmentIndex: row.assignmentIndex || 0,
-      oiid: row.oiid,
-      airportName: row.airportName,
-      airportLocation: row.airportLocation || '',
-      tapes: tapesArray,
-      tapeName: firstTape.tapeName || '',
-      tapeQuantity: firstTape.tapeQuantity || '',
-      tapeColor: firstTape.tapeColor || '',
-      products: [{
-        product: row.product,
-        grossWeight: row.grossWeight,
-        labour: row.labour,
-        ct: row.ct || '',
-        noOfPkgs: parseInt(row.noOfPkgs, 10) || 0,
-        driver: driver?.driver_name || '',
-        vehicleNumber: row.vehicleNumber || '',
-        status: row.status || 'pending',
-        oiid: row.oiid,
-        assignmentIndex: row.assignmentIndex || 0,
-        rowId: row.id,
-      }],
-    };
-  });
+      airportGroups[airportCode] = {
+        airportCode,
+        rowId: primaryRow.id,
+        rowIds: rows.map((r) => r.id),
+        assignmentIndex: primaryRow.assignmentIndex || 0,
+        oiid: primaryRow.oiid,
+        airportName: primaryRow.airportName,
+        airportLocation: primaryRow.airportLocation || '',
+        tapes: tapesArray,
+        tapeName: firstTape.tapeName || '',
+        tapeQuantity: firstTape.tapeQuantity || '',
+        tapeColor: firstTape.tapeColor || '',
+        products: rows.map((row) => {
+          const driver = drivers.find((d) => d.did === parseInt(row.selectedDriver, 10));
+          return {
+            product: row.product,
+            grossWeight: row.grossWeight,
+            labour: row.labour,
+            ct: row.ct || '',
+            noOfPkgs: parseInt(row.noOfPkgs, 10) || 0,
+            driver: driver?.driver_name || '',
+            vehicleNumber: row.vehicleNumber || '',
+            status: row.status || 'pending',
+            oiid: row.oiid,
+            assignmentIndex: row.assignmentIndex || 0,
+            rowId: row.id,
+          };
+        }),
+      };
+    });
 
   return { airportGroups, airportGroupsArray: Object.values(airportGroups) };
 };
 
 export const buildGvtSummaryCards = (productRows, drivers, customerName) => {
   const gvtCodeByRowId = buildGvtCodeByRowId(productRows, customerName);
-  return getGvtDeliveryRows(productRows).map((row) => {
-    const driverInfo = drivers.find((d) => d.did === parseInt(row.selectedDriver, 10));
-    const driverKey = driverInfo
-      ? `${driverInfo.driver_name} - ${driverInfo.driver_id}`
-      : String(row.selectedDriver || 'Unassigned');
-    const weightStr = String(row.grossWeight || '').replace(/[^0-9.]/g, '');
-    return {
-      key: row.id,
-      driverKey,
-      driverInfo,
-      product: { ...row, sequentialCode: gvtCodeByRowId[row.id] || '-' },
-      totalPackages: parseInt(row.noOfPkgs, 10) || 0,
-      totalWeight: parseFloat(weightStr) || 0,
-    };
+  const rowsByCode = {};
+
+  getGvtDeliveryRows(productRows).forEach((row) => {
+    const code = gvtCodeByRowId[row.id] || '-';
+    if (!rowsByCode[code]) rowsByCode[code] = [];
+    rowsByCode[code].push(row);
   });
+
+  return Object.keys(rowsByCode)
+    .sort((a, b) => a.localeCompare(b))
+    .map((code) => {
+      const rows = rowsByCode[code];
+      const first = rows[0];
+      const driverInfo = drivers.find((d) => d.did === parseInt(first.selectedDriver, 10));
+      const driverKey = driverInfo
+        ? `${driverInfo.driver_name} - ${driverInfo.driver_id}`
+        : String(first.selectedDriver || 'Unassigned');
+
+      let totalPackages = 0;
+      let totalWeight = 0;
+      const products = rows.map((row) => {
+        totalPackages += parseInt(row.noOfPkgs, 10) || 0;
+        const weightStr = String(row.grossWeight || '').replace(/[^0-9.]/g, '');
+        totalWeight += parseFloat(weightStr) || 0;
+        return { ...row, sequentialCode: code };
+      });
+
+      return {
+        key: code,
+        airportCode: code,
+        tapeKey: code,
+        driverKey,
+        driverInfo,
+        products,
+        airportName: first.airportName,
+        airportLocation: first.airportLocation || '',
+        totalPackages,
+        totalWeight,
+      };
+    });
 };
 
 export default FlowerOrderAssignStage3;

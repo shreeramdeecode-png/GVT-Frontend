@@ -1463,16 +1463,15 @@ const OrderAssignCreateStage3 = () => {
             </div>
             <div>
               <h2 className="text-lg font-bold text-gray-900">Airport Delivery Summary</h2>
-              <p className="text-sm text-gray-600">One GVT card per split delivery</p>
+              <p className="text-sm text-gray-600">Same location shares GVT; same product splits get separate GVT</p>
             </div>
           </div>
 
           {/* Desktop Summary */}
           <div className="hidden lg:block space-y-6">
             {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
-              const product = card.product;
-              const groupKey = product.id;
-              const airportCode = product.sequentialCode || '-';
+              const groupKey = card.tapeKey || card.airportCode;
+              const airportCode = card.airportCode || '-';
 
               return (
                 <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
@@ -1482,7 +1481,7 @@ const OrderAssignCreateStage3 = () => {
                         <Truck className="w-6 h-6" />
                         <div>
                           <h3 className="text-lg font-bold">{card.driverKey}</h3>
-                          <p className="text-sm text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
+                          <p className="text-sm text-emerald-100">{card.products.length} Product{card.products.length !== 1 ? 's' : ''} • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
                       </div>
                       {airportCode !== '-' && (
@@ -1506,7 +1505,8 @@ const OrderAssignCreateStage3 = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        <tr className="hover:bg-emerald-50 transition-colors">
+                        {card.products.map((product) => (
+                        <tr key={product.id} className="hover:bg-emerald-50 transition-colors">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
@@ -1553,6 +1553,7 @@ const OrderAssignCreateStage3 = () => {
                             </select>
                           </td>
                         </tr>
+                        ))}
                       </tbody>
                       <tbody>
                         <tr>
@@ -1563,8 +1564,8 @@ const OrderAssignCreateStage3 = () => {
                                   <span className="text-xs font-bold text-blue-600">{airportCode}</span>
                                   <MapPin className="w-3 h-3 text-gray-400" />
                                 </div>
-                                <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
-                                <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
+                                <p className="text-xs text-gray-600 font-medium">{card.airportName}</p>
+                                <p className="text-xs text-gray-500">{card.totalPackages} pkgs • {card.products.length} product(s)</p>
                               </div>
                               <div className="space-y-3">
                                 {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
@@ -1643,9 +1644,8 @@ const OrderAssignCreateStage3 = () => {
           {/* Mobile Summary */}
           <div className="lg:hidden space-y-6">
             {buildGvtSummaryCards(productRows, drivers, orderData?.customer_name || '').map((card) => {
-              const product = card.product;
-              const groupKey = product.id;
-              const airportCode = product.sequentialCode || '-';
+              const groupKey = card.tapeKey || card.airportCode;
+              const airportCode = card.airportCode || '-';
 
               return (
                 <div key={card.key} className="bg-white rounded-lg shadow-sm overflow-hidden border-2 border-emerald-300">
@@ -1655,7 +1655,7 @@ const OrderAssignCreateStage3 = () => {
                         <Truck className="w-5 h-5" />
                         <div>
                           <h3 className="text-base font-bold">{card.driverKey}</h3>
-                          <p className="text-xs text-emerald-100">1 Product • {card.driverInfo?.vehicle_number || 'N/A'}</p>
+                          <p className="text-xs text-emerald-100">{card.products.length} Product{card.products.length !== 1 ? 's' : ''} • {card.driverInfo?.vehicle_number || 'N/A'}</p>
                         </div>
                       </div>
                       {airportCode !== '-' && (
@@ -1665,7 +1665,8 @@ const OrderAssignCreateStage3 = () => {
                   </div>
 
                   <div className="p-4 space-y-3">
-                    <div className="border border-gray-200 rounded-lg p-3">
+                    {card.products.map((product) => (
+                    <div key={product.id} className="border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center gap-2 mb-1">
                         <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
                         <span className="text-sm font-semibold text-gray-900">{product.product}</span>
@@ -1716,6 +1717,7 @@ const OrderAssignCreateStage3 = () => {
                         </div>
                       </div>
                     </div>
+                    ))}
 
                     <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
                       <div className="border-2 border-blue-200 rounded-lg p-3 bg-white">
@@ -1724,8 +1726,8 @@ const OrderAssignCreateStage3 = () => {
                             <span className="text-xs font-bold text-blue-600">{airportCode}</span>
                             <MapPin className="w-3 h-3 text-gray-400" />
                           </div>
-                          <p className="text-xs text-gray-600 font-medium">{product.airportName}</p>
-                          <p className="text-xs text-gray-500">{product.noOfPkgs} pkgs • {product.product}</p>
+                          <p className="text-xs text-gray-600 font-medium">{card.airportName}</p>
+                          <p className="text-xs text-gray-500">{card.totalPackages} pkgs • {card.products.length} product(s)</p>
                         </div>
                         <div className="space-y-3">
                           {getTapesForAirport(groupKey).map((tapeEntry, tapeIndex) => (
