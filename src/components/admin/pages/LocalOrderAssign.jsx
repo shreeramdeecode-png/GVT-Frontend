@@ -1974,77 +1974,22 @@ const LocalOrderAssign = () => {
                     <span className="text-sm text-gray-600 capitalize">{route.entityType || '-'}</span>
                   </td>
                   <td className="px-4 py-4">
-                    <div className="relative">
-                      <button
-                        ref={(el) => { labourButtonRefs.current[route.routeId] = el; }}
-                        type="button"
-                        onClick={() => setLabourDropdownOpen(prev => ({ ...prev, [route.routeId]: !prev[route.routeId] }))}
-                        className="min-w-[150px] w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-left bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none flex items-center justify-between"
-                      >
-                        <span className="text-gray-700">
-                          {(!route.labours || route.labours.length === 0)
-                            ? 'Select labours...'
-                            : `${route.labours.length} labour${route.labours.length > 1 ? 's' : ''} selected`}
-                        </span>
-                        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${labourDropdownOpen[route.routeId] ? 'rotate-180' : ''}`} />
-                      </button>
-                      {labourDropdownOpen[route.routeId] && (
-                        <div className="absolute z-10 mt-1 w-full border border-gray-300 rounded-lg bg-white shadow-lg">
-                          <div className="max-h-64 overflow-y-auto">
-                            <table className="w-full">
-                              <tbody className="divide-y divide-gray-200">
-                                {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => (
-                                  <tr key={`labour-${labour.lid}`} className="hover:bg-gray-50 cursor-pointer">
-                                    <td className="px-3 py-2">
-                                      <label className="flex items-center gap-2 cursor-pointer w-full">
-                                        <input
-                                          type="checkbox"
-                                          checked={(route.labours || []).includes(labour.full_name)}
-                                          onChange={(e) => {
-                                            const updatedRoutes = [...deliveryRoutes];
-                                            const currentLabours = updatedRoutes[index].labours || [];
-                                            if (e.target.checked) {
-                                              updatedRoutes[index].labours = [...currentLabours, labour.full_name];
-                                            } else {
-                                              updatedRoutes[index].labours = currentLabours.filter(l => l !== labour.full_name);
-                                            }
-                                            setDeliveryRoutes(updatedRoutes);
-                                          }}
-                                          className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                                        />
-                                        <span className="text-sm text-gray-900">{labour.full_name}</span>
-                                      </label>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            {(!assignmentOptions.labours || assignmentOptions.labours.length === 0) && (
-                              <div className="px-3 py-2">
-                                <p className="text-sm text-gray-500">No labours available</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      {route.labours && route.labours.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {route.labours.map((labourName, idx) => (
-                            <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-xs">
-                              {labourName}
-                              <X
-                                className="w-3 h-3 cursor-pointer hover:text-emerald-900"
-                                onClick={() => {
-                                  const updatedRoutes = [...deliveryRoutes];
-                                  updatedRoutes[index].labours = (updatedRoutes[index].labours || []).filter(l => l !== labourName);
-                                  setDeliveryRoutes(updatedRoutes);
-                                }}
-                              />
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <select
+                      className="min-w-[150px] w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      value={route.labours?.[0] || ''}
+                      onChange={(e) => {
+                        const updatedRoutes = [...deliveryRoutes];
+                        updatedRoutes[index].labours = e.target.value ? [e.target.value] : [];
+                        setDeliveryRoutes(updatedRoutes);
+                      }}
+                    >
+                      <option value="">Select labours...</option>
+                      {assignmentOptions.labours && sortDropdownObjects(assignmentOptions.labours, (l) => l.full_name).map(labour => (
+                        <option key={`labour-${labour.lid}`} value={labour.full_name}>
+                          {labour.full_name}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td className="px-4 py-4">
                     <select
@@ -2122,77 +2067,22 @@ const LocalOrderAssign = () => {
 
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Assigned Labour</label>
-                  <div className="relative">
-                    <button
-                      ref={(el) => { labourButtonRefs.current[route.routeId] = el; }}
-                      type="button"
-                      onClick={() => setLabourDropdownOpen(prev => ({ ...prev, [route.routeId]: !prev[route.routeId] }))}
-                      className="min-w-[150px] w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-left bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none flex items-center justify-between"
-                    >
-                      <span className="text-gray-700">
-                        {(!route.labours || route.labours.length === 0)
-                          ? 'Select labours...'
-                          : `${route.labours.length} labour${route.labours.length > 1 ? 's' : ''} selected`}
-                      </span>
-                      <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${labourDropdownOpen[route.routeId] ? 'rotate-180' : ''}`} />
-                    </button>
-                    {labourDropdownOpen[route.routeId] && (
-                      <div className="absolute z-10 mt-1 w-full border border-gray-300 rounded-lg bg-white shadow-lg">
-                        <div className="max-h-64 overflow-y-auto">
-                          <table className="w-full">
-                            <tbody className="divide-y divide-gray-200">
-                              {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && assignmentOptions.labours.map(labour => (
-                                <tr key={`labour-${labour.lid}`} className="hover:bg-gray-50 cursor-pointer">
-                                  <td className="px-3 py-2">
-                                    <label className="flex items-center gap-2 cursor-pointer w-full">
-                                      <input
-                                        type="checkbox"
-                                        checked={(route.labours || []).includes(labour.full_name)}
-                                        onChange={(e) => {
-                                          const updatedRoutes = [...deliveryRoutes];
-                                          const currentLabours = updatedRoutes[index].labours || [];
-                                          if (e.target.checked) {
-                                            updatedRoutes[index].labours = [...currentLabours, labour.full_name];
-                                          } else {
-                                            updatedRoutes[index].labours = currentLabours.filter(l => l !== labour.full_name);
-                                          }
-                                          setDeliveryRoutes(updatedRoutes);
-                                        }}
-                                        className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                                      />
-                                      <span className="text-sm text-gray-900">{labour.full_name}</span>
-                                    </label>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {(!assignmentOptions.labours || assignmentOptions.labours.length === 0) && (
-                            <div className="px-3 py-2">
-                              <p className="text-sm text-gray-500">No labours available</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {route.labours && route.labours.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {route.labours.map((labourName, idx) => (
-                          <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-xs">
-                            {labourName}
-                            <X
-                              className="w-3 h-3 cursor-pointer hover:text-emerald-900"
-                              onClick={() => {
-                                const updatedRoutes = [...deliveryRoutes];
-                                updatedRoutes[index].labours = (updatedRoutes[index].labours || []).filter(l => l !== labourName);
-                                setDeliveryRoutes(updatedRoutes);
-                              }}
-                            />
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                    value={route.labours?.[0] || ''}
+                    onChange={(e) => {
+                      const updatedRoutes = [...deliveryRoutes];
+                      updatedRoutes[index].labours = e.target.value ? [e.target.value] : [];
+                      setDeliveryRoutes(updatedRoutes);
+                    }}
+                  >
+                    <option value="">Select labours...</option>
+                    {assignmentOptions.labours && sortDropdownObjects(assignmentOptions.labours, (l) => l.full_name).map(labour => (
+                      <option key={`labour-${labour.lid}`} value={labour.full_name}>
+                        {labour.full_name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

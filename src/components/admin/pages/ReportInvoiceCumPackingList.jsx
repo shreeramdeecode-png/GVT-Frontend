@@ -9,7 +9,8 @@ const ReportInvoiceCumPackingList = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [filteredOrders, setFilteredOrders] = useState([]);
-  const [orderAmounts, setOrderAmounts] = useState({}); // Store calculated amounts by order ID
+  const [orderAmounts, setOrderAmounts] = useState({});
+  const [packedBoxesData, setPackedBoxesData] = useState({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -44,6 +45,7 @@ const ReportInvoiceCumPackingList = () => {
 
         // Fetch stage4 data and calculate amounts for each order
         const amountsMap = {};
+        const packedBoxesMap = {};
         const cleanForMatching = (name) => {
           if (!name) return '';
           return name.replace(/^\d+\s*-\s*/, '').trim();
@@ -75,6 +77,24 @@ const ReportInvoiceCumPackingList = () => {
               return;
             }
 
+            // Get stage3 packed boxes per oiid (excludes pending boxes)
+            let totalPackedBoxes = 0;
+            const packedBoxesByOiid = {};
+            try {
+              if (assignmentRes.data?.stage3_data) {
+                const stage3Data = typeof assignmentRes.data.stage3_data === 'string'
+                  ? JSON.parse(assignmentRes.data.stage3_data)
+                  : assignmentRes.data.stage3_data;
+                (stage3Data.products || []).forEach(p => {
+                  const key = String(p.oiid);
+                  const pkgs = parseInt(p.noOfPkgs) || 0;
+                  packedBoxesByOiid[key] = (packedBoxesByOiid[key] || 0) + pkgs;
+                  totalPackedBoxes += pkgs;
+                });
+              }
+            } catch { /* ignore */ }
+            packedBoxesMap[order.oid] = totalPackedBoxes;
+
             // Get stage4 data
             let stage4ProductRows = [];
             try {
@@ -94,7 +114,7 @@ const ReportInvoiceCumPackingList = () => {
             assignments.forEach(assignment => {
               const cleanAssignmentProduct = cleanForMatching(assignment.product);
 
-              // Get quantity
+              // Get quantity — use packed boxes proportion to exclude pending boxes
               let qty = parseFloat(assignment.assignedQty) || 0;
               if (!qty) {
                 const matchingItem = order.items?.find(item => {
@@ -102,7 +122,15 @@ const ReportInvoiceCumPackingList = () => {
                   return cleanForMatching(itemProduct) === cleanAssignmentProduct;
                 });
                 if (matchingItem) {
-                  qty = parseFloat(matchingItem.net_weight) || parseFloat(matchingItem.quantity) || 0;
+                  const oiid = String(matchingItem.oiid || '');
+                  const packedBoxes = oiid ? (packedBoxesByOiid[oiid] || 0) : 0;
+                  const totalBoxes = parseInt(matchingItem.num_boxes) || 0;
+                  const fullNetWeight = parseFloat(matchingItem.net_weight) || parseFloat(matchingItem.quantity) || 0;
+                  if (packedBoxes > 0 && totalBoxes > 0 && fullNetWeight > 0) {
+                    qty = (packedBoxes / totalBoxes) * fullNetWeight;
+                  } else {
+                    qty = fullNetWeight;
+                  }
                 }
               }
 
@@ -131,6 +159,7 @@ const ReportInvoiceCumPackingList = () => {
 
         await Promise.all(amountPromises);
         setOrderAmounts(amountsMap);
+        setPackedBoxesData(packedBoxesMap);
       } catch (error) {
         console.error('Error fetching orders:', error);
       } finally {
@@ -200,22 +229,13 @@ const ReportInvoiceCumPackingList = () => {
       change: 'This Period', 
       color: 'bg-gradient-to-r from-[#6EE7B7] to-[#34D399]' 
     },
-    { 
-      label: 'Total Boxes', 
+    {
+      label: 'Total Boxes',
       value: loading ? '...' : filteredOrders.reduce((sum, order) => {
-        const parseNumBoxes = (numBoxesStr) => {
-          if (!numBoxesStr) return 0;
-          if (typeof numBoxesStr === 'number') return numBoxesStr;
-          const match = String(numBoxesStr).match(/^(\d+(?:\.\d+)?)/);
-          return match ? parseFloat(match[1]) : 0;
-        };
-        return sum + (order.items?.reduce((itemSum, item) => {
-          const numBoxes = parseNumBoxes(item.num_boxes);
-          return itemSum + numBoxes;
-        }, 0) || 0);
-      }, 0).toLocaleString(), 
-      change: 'Packed Items', 
-      color: 'bg-gradient-to-r from-[#10B981] to-[#059669]' 
+        return sum + (packedBoxesData[order.oid] || 0);
+      }, 0).toLocaleString(),
+      change: 'Packed Items',
+      color: 'bg-gradient-to-r from-[#10B981] to-[#059669]'
     },
     { 
       label: 'Total Weight', 
@@ -337,11 +357,10 @@ const ReportInvoiceCumPackingList = () => {
                     return match ? parseFloat(match[1]) : 0;
                   };
 
-                  // Calculate boxes, net weight and gross weight from order items
-                  const totalBoxes = order.items?.reduce((sum, item) => {
-                    const numBoxes = parseNumBoxes(item.num_boxes);
-                    return sum + numBoxes;
-                  }, 0) || 0;
+                  // Use packed boxes from Stage 3 (excludes pending boxes), fall back to order items
+                  const totalBoxes = packedBoxesData[order.oid] !== undefined
+                    ? packedBoxesData[order.oid]
+                    : order.items?.reduce((sum, item) => sum + parseNumBoxes(item.num_boxes), 0) || 0;
                   const netWeight = order.items?.reduce((sum, item) => sum + (parseFloat(item.net_weight) || 0), 0) || 0;
                   const grossWeight = order.items?.reduce((sum, item) => sum + (parseFloat(item.gross_weight) || 0), 0) || 0;
                   

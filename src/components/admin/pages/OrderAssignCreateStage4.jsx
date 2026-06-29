@@ -397,11 +397,17 @@ const OrderAssignCreateStage4 = () => {
                     }
 
                     if (items.length > 0) {
+                        // Strip Tamil/non-ASCII parenthetical suffixes before name matching
+                        // e.g. "BIG YAM (SATTI KARUNAI) (கருணைக்கிழங்கு)" → "BIG YAM (SATTI KARUNAI)"
+                        const normalizeProductName = (s) =>
+                            s.replace(/\s*\([^a-zA-Z0-9\s()]*\)\s*/g, ' ').toLowerCase().replace(/\s+/g, ' ').trim();
+
                         const rows = items.map((item) => {
                             let currentPrice = 0;
                             const productName = (item.product_name || item.product || '').replace(/^\d+\s*-\s*/, '').trim();
                             const matchedProduct = allProductsList.find(p =>
-                                p.product_name?.toLowerCase() === productName.toLowerCase()
+                                p.product_name?.toLowerCase() === productName.toLowerCase() ||
+                                normalizeProductName(p.product_name || '') === normalizeProductName(productName)
                             );
 
                             if (matchedProduct) {
@@ -423,7 +429,9 @@ const OrderAssignCreateStage4 = () => {
                                 assignedBoxes: 0,
                                 price: 0,
                                 canEdit: true,
-                                place: ''
+                                place: '',
+                                noOfPkgs: 0,
+                                airportName: ''
                             };
                         });
 
@@ -563,6 +571,32 @@ const OrderAssignCreateStage4 = () => {
                             }
                         });
 
+                        // Pull noOfPkgs and airportName from stage3_data so the price
+                        // calculation only fires when airport and packages are both assigned.
+                        if (assignmentData.stage3_data) {
+                            try {
+                                const stage3Data = typeof assignmentData.stage3_data === 'string'
+                                    ? JSON.parse(assignmentData.stage3_data)
+                                    : assignmentData.stage3_data;
+                                const s3Map = {};
+                                (stage3Data.products || []).forEach(p => {
+                                    const key = String(p.oiid);
+                                    if (!s3Map[key]) s3Map[key] = p;
+                                });
+                                rows.forEach(row => {
+                                    const s3 = s3Map[String(row.id)];
+                                    if (s3) {
+                                        const pkgs = parseInt(s3.noOfPkgs) || 0;
+                                        row.noOfPkgs = pkgs;
+                                        row.assignedBoxes = String(pkgs);
+                                        row.airportName = s3.airportName || '';
+                                    }
+                                });
+                            } catch (e) {
+                                console.error('Error reading stage3_data in stage4:', e);
+                            }
+                        }
+
                         setProductRows(rows);
                         setDeliveryRoutes(loadedDeliveryRoutes);
 
@@ -630,11 +664,15 @@ const OrderAssignCreateStage4 = () => {
         }
 
         if (items.length > 0) {
+            const normalizeProductName = (s) =>
+                s.replace(/\s*\([^a-zA-Z0-9\s()]*\)\s*/g, ' ').toLowerCase().replace(/\s+/g, ' ').trim();
+
             const rows = items.map((item) => {
                 let currentPrice = 0;
                 const productName = (item.product_name || item.product || '').replace(/^\d+\s*-\s*/, '').trim();
                 const matchedProduct = allProductsList.find(p =>
-                    p.product_name?.toLowerCase() === productName.toLowerCase()
+                    p.product_name?.toLowerCase() === productName.toLowerCase() ||
+                    normalizeProductName(p.product_name || '') === normalizeProductName(productName)
                 );
 
                 if (matchedProduct) {
@@ -993,17 +1031,21 @@ const OrderAssignCreateStage4 = () => {
     const displayRows = React.useMemo(() => getDisplayRows(), [productRows, remainingRowAssignments, isBoxBasedOrder]);
 
     const getEffectiveWeightForAmount = (row) => {
+        // Only calculate when airport and packaged quantity are assigned from Stage 3
+        if (!row.airportName || !row.noOfPkgs) return 0;
+
         const pickedQty = parseFloat(row.assignedQty) || 0;
         if (pickedQty > 0) return pickedQty;
-        if (isBoxBasedOrder) {
-            const pickedBoxes = parseFloat(row.assignedBoxes) || 0;
-            const neededBoxes = parseFloat(row.num_boxes) || 0;
-            const neededWeight = parseFloat(row.net_weight) || 0;
-            if (pickedBoxes > 0 && neededBoxes > 0 && neededWeight > 0) {
-                return (pickedBoxes / neededBoxes) * neededWeight;
-            }
+
+        // Use noOfPkgs from Stage 3 — only packed boxes, excludes pending boxes
+        const noOfPkgs = parseInt(row.noOfPkgs) || 0;
+        const totalBoxes = parseFloat(row.num_boxes) || 0;
+        const totalWeight = parseFloat(row.net_weight) || 0;
+        if (noOfPkgs > 0 && totalBoxes > 0 && totalWeight > 0) {
+            return (noOfPkgs / totalBoxes) * totalWeight;
         }
-        return parseFloat(row.net_weight) || 0;
+
+        return totalWeight;
     };
 
     // Check if we have any routes with drivers assigned
@@ -1125,7 +1167,7 @@ const OrderAssignCreateStage4 = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                            {displayRows.map((row, index) => {
+                            {displayRows.filter(row => !row.isRemaining).map((row, index) => {
                                 const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
                                 const stockQty = availableStock[productName] || 0;
 
@@ -1474,7 +1516,7 @@ const OrderAssignCreateStage4 = () => {
 
                 {/* Product Cards - Mobile */}
                 <div className="lg:hidden space-y-4">
-                    {displayRows.map((row, index) => {
+                    {displayRows.filter(row => !row.isRemaining).map((row, index) => {
                         const productName = (row.product_name || row.product)?.replace(/^\d+\s*-\s*/, '');
                         const stockQty = availableStock[productName] || 0;
 

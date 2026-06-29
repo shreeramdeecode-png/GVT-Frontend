@@ -1717,70 +1717,22 @@ const OrderAssignCreateStage1 = () => {
                     <span className="text-sm text-gray-600 capitalize">{route.entityType || '-'}</span>
                   </td>
                   <td className="px-4 py-4">
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updatedRoutes = [...deliveryRoutes];
-                          updatedRoutes[index].labourDropdownOpen = !updatedRoutes[index].labourDropdownOpen;
-                          setDeliveryRoutes(updatedRoutes);
-                        }}
-                        className="min-w-[140px] w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-left flex items-center justify-between bg-white hover:bg-gray-50"
-                      >
-                        <span className="truncate">
-                          {route.labour && (Array.isArray(route.labour) && route.labour.length > 0)
-                            ? `${route.labour.length} labour${route.labour.length > 1 ? 's' : ''} selected`
-                            : 'Select labour...'}
-                        </span>
-                        <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                      </button>
-
-                      {route.labourDropdownOpen && (
-                        <>
-                          <div
-                            className="fixed inset-0 z-10"
-                            onClick={() => {
-                              const updatedRoutes = [...deliveryRoutes];
-                              updatedRoutes[index].labourDropdownOpen = false;
-                              setDeliveryRoutes(updatedRoutes);
-                            }}
-                          />
-                          <div className={`absolute z-20 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto ${index >= deliveryRoutes.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
-                            {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
-                              const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
-                              return (
-                                <label
-                                  key={`labour-${labour.lid}`}
-                                  className="flex items-center px-3 py-2 hover:bg-gray-50 cursor-pointer"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={(e) => {
-                                      const updatedRoutes = [...deliveryRoutes];
-                                      let currentLabours = route.labour ? (Array.isArray(route.labour) ? [...route.labour] : [route.labour]) : [];
-
-                                      if (e.target.checked) {
-                                        if (!currentLabours.includes(labour.full_name)) {
-                                          currentLabours.push(labour.full_name);
-                                        }
-                                      } else {
-                                        currentLabours = currentLabours.filter(l => l !== labour.full_name);
-                                      }
-
-                                      updatedRoutes[index].labour = currentLabours;
-                                      setDeliveryRoutes(updatedRoutes);
-                                    }}
-                                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                                  />
-                                  <span className="ml-2 text-sm text-gray-700">{labour.full_name}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </>
-                      )}
-                    </div>
+                    <select
+                      className="min-w-[140px] w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      value={(Array.isArray(route.labour) ? route.labour[0] : route.labour) || ''}
+                      onChange={(e) => {
+                        const updatedRoutes = [...deliveryRoutes];
+                        updatedRoutes[index].labour = e.target.value ? [e.target.value] : [];
+                        setDeliveryRoutes(updatedRoutes);
+                      }}
+                    >
+                      <option value="">Select labour...</option>
+                      {assignmentOptions.labours && sortDropdownObjects(assignmentOptions.labours, (l) => l.full_name).map(labour => (
+                        <option key={`labour-${labour.lid}`} value={labour.full_name}>
+                          {labour.full_name}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td className="px-4 py-4">
                     <select
@@ -1858,70 +1810,22 @@ const OrderAssignCreateStage1 = () => {
 
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Assigned Labour</label>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updatedRoutes = [...deliveryRoutes];
-                        updatedRoutes[index].labourDropdownOpen = !updatedRoutes[index].labourDropdownOpen;
-                        setDeliveryRoutes(updatedRoutes);
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-left flex items-center justify-between bg-white hover:bg-gray-50"
-                    >
-                      <span className="truncate">
-                        {route.labour && (Array.isArray(route.labour) && route.labour.length > 0)
-                          ? `${route.labour.length} labour${route.labour.length > 1 ? 's' : ''} selected`
-                          : 'Select labour...'}
-                      </span>
-                      <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                    </button>
-
-                    {route.labourDropdownOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-10"
-                          onClick={() => {
-                            const updatedRoutes = [...deliveryRoutes];
-                            updatedRoutes[index].labourDropdownOpen = false;
-                            setDeliveryRoutes(updatedRoutes);
-                          }}
-                        />
-                        <div className={`absolute z-20 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto ${index >= deliveryRoutes.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
-                          {assignmentOptions.labours && Array.isArray(assignmentOptions.labours) && sortDropdownObjects(assignmentOptions.labours, (labour) => labour.full_name).map(labour => {
-                            const isSelected = route.labour && (Array.isArray(route.labour) ? route.labour.includes(labour.full_name) : route.labour === labour.full_name);
-                            return (
-                              <label
-                                key={`labour-mobile-${labour.lid}`}
-                                className="flex items-center px-3 py-2 hover:bg-gray-50 cursor-pointer"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={(e) => {
-                                    const updatedRoutes = [...deliveryRoutes];
-                                    let currentLabours = route.labour ? (Array.isArray(route.labour) ? [...route.labour] : [route.labour]) : [];
-
-                                    if (e.target.checked) {
-                                      if (!currentLabours.includes(labour.full_name)) {
-                                        currentLabours.push(labour.full_name);
-                                      }
-                                    } else {
-                                      currentLabours = currentLabours.filter(l => l !== labour.full_name);
-                                    }
-
-                                    updatedRoutes[index].labour = currentLabours;
-                                    setDeliveryRoutes(updatedRoutes);
-                                  }}
-                                  className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                                />
-                                <span className="ml-2 text-sm text-gray-700">{labour.full_name}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                    value={(Array.isArray(route.labour) ? route.labour[0] : route.labour) || ''}
+                    onChange={(e) => {
+                      const updatedRoutes = [...deliveryRoutes];
+                      updatedRoutes[index].labour = e.target.value ? [e.target.value] : [];
+                      setDeliveryRoutes(updatedRoutes);
+                    }}
+                  >
+                    <option value="">Select labour...</option>
+                    {assignmentOptions.labours && sortDropdownObjects(assignmentOptions.labours, (l) => l.full_name).map(labour => (
+                      <option key={`labour-mobile-${labour.lid}`} value={labour.full_name}>
+                        {labour.full_name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

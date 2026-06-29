@@ -475,16 +475,39 @@ export function buildStage4ReportRows(stage4Data, assignment, order) {
     if (oi.oiid != null) orderItemsByOiid[oi.oiid] = oi;
   });
 
+  // Load Stage 3 packed boxes per oiid — this is the authoritative count (excludes pending)
+  const stage3PackedByOiid = {};
+  try {
+    if (assignment?.stage3_data) {
+      const s3 = typeof assignment.stage3_data === 'string'
+        ? JSON.parse(assignment.stage3_data)
+        : assignment.stage3_data;
+      (s3.products || []).forEach((p) => {
+        const key = String(p.oiid);
+        stage3PackedByOiid[key] = (stage3PackedByOiid[key] || 0) + (parseInt(p.noOfPkgs) || 0);
+      });
+    }
+  } catch { /* ignore */ }
+
   return productRows.map((row) => {
     const oiid = row.id ?? row.oiid;
     const orderItem = oiid != null ? orderItemsByOiid[oiid] : null;
 
-    let boughtKg = getStage4BoughtWeightKg(row, remaining, { isBoxBasedOrder: boxOrder });
-    if (boughtKg <= 0 && oiid != null) {
-      boughtKg = sumStage1PickedKgForOiid(oiid, stage1Assignments, orderItem);
-    }
-    if (boughtKg <= 0 && oiid != null) {
-      boughtKg = stage2Picked[String(oiid)] || 0;
+    let boughtKg;
+    const stage3Pkgs = oiid != null ? stage3PackedByOiid[String(oiid)] : undefined;
+    if (boxOrder && stage3Pkgs !== undefined && orderItem) {
+      // Use Stage 3 packed count to exclude pending boxes from bought weight
+      const totalBoxes = parseNumBoxes(orderItem.num_boxes);
+      const netWeight = parseFloat(orderItem.net_weight) || 0;
+      boughtKg = totalBoxes > 0 && netWeight > 0 ? (stage3Pkgs / totalBoxes) * netWeight : 0;
+    } else {
+      boughtKg = getStage4BoughtWeightKg(row, remaining, { isBoxBasedOrder: boxOrder });
+      if (boughtKg <= 0 && oiid != null) {
+        boughtKg = sumStage1PickedKgForOiid(oiid, stage1Assignments, orderItem);
+      }
+      if (boughtKg <= 0 && oiid != null) {
+        boughtKg = stage2Picked[String(oiid)] || 0;
+      }
     }
 
     const sellingKg = parseKg(row.net_weight ?? row.quantity);
@@ -1708,6 +1731,42 @@ const ReportOrderView = () => {
                                         }
                                         return null;
                                     })()}
+                                </div>
+                            ) : order?.items && order.items.length > 0 ? (
+                                <div>
+                                    <p className="text-sm text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 mb-4">
+                                        Assignment not yet completed — showing ordered products only.
+                                    </p>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full">
+                                            <thead className="bg-[#0D8568] text-white">
+                                                <tr>
+                                                    <th className="px-4 py-3 text-left whitespace-nowrap">Product</th>
+                                                    <th className="px-4 py-3 text-left whitespace-nowrap">Qty (kg)</th>
+                                                    <th className="px-4 py-3 text-left whitespace-nowrap">Boxes/Bags</th>
+                                                    <th className="px-4 py-3 text-left whitespace-nowrap">Gross Weight</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {order.items.map((item, i) => (
+                                                    <tr key={i} className={`border-b border-gray-100 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                                                        <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                                                            {(item.product_name || item.product || '').replace(/^\d+\s*-\s*/, '')}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-sm text-gray-700">
+                                                            {item.net_weight ? `${item.net_weight} kg` : '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-sm text-gray-700">
+                                                            {item.num_boxes || '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-sm text-gray-700">
+                                                            {item.gross_weight ? `${item.gross_weight} kg` : '-'}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
                             ) : (
                                 <p className="text-[#6B8782]">No Stage 1 data available</p>

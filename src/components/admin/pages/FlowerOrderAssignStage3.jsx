@@ -1798,14 +1798,14 @@ export function buildStage3WeightSplitMap(stage3Products, orderItems = [], stage
     const orderItem = orderByOiid[oiid] || {};
     const productName = rows[0].product || rows[0].productName || orderItem.product_name;
     const productKey = normalizeProductKey(productName);
-    const totalNet =
+    const fullNet =
       stage4NetByProduct[productKey] ?? parseKg(orderItem.net_weight) ?? 0;
 
-    let totalGross = parseKg(orderItem.gross_weight);
-    if (totalGross <= 0) {
-      totalGross = Math.max(...rows.map((r) => parseKg(r.grossWeight || r.gross_weight)), 0);
+    let fullGross = parseKg(orderItem.gross_weight);
+    if (fullGross <= 0) {
+      fullGross = Math.max(...rows.map((r) => parseKg(r.grossWeight || r.gross_weight)), 0);
     }
-    if (totalGross <= 0 && totalNet > 0) totalGross = totalNet;
+    if (fullGross <= 0 && fullNet > 0) fullGross = fullNet;
 
     const assignedBoxes = rows.reduce(
       (s, r) => s + (parseInt(r.noOfPkgs ?? r.no_of_pkgs, 10) || 0),
@@ -1814,7 +1814,17 @@ export function buildStage3WeightSplitMap(stage3Products, orderItems = [], stage
     const totalBoxes =
       assignedBoxes > 0
         ? assignedBoxes
-        : parseNumBoxes(orderItem.num_boxes) || rows[0].totalBoxes || 0;
+        : parseNumBoxes(orderItem.num_boxes) || rows[0]?.totalBoxes || 0;
+
+    // Scale net/gross down to only packed boxes, excluding pending boxes
+    const orderTotalBoxes = parseNumBoxes(orderItem.num_boxes) || rows[0]?.totalBoxes || 0;
+    let totalNet = fullNet;
+    let totalGross = fullGross;
+    if (orderTotalBoxes > 0 && assignedBoxes > 0 && assignedBoxes < orderTotalBoxes && fullNet > 0) {
+      const packRatio = assignedBoxes / orderTotalBoxes;
+      totalNet = fullNet * packRatio;
+      totalGross = fullGross * packRatio;
+    }
 
     rows.forEach((row) => {
       const boxes = parseInt(row.noOfPkgs ?? row.no_of_pkgs, 10) || 0;

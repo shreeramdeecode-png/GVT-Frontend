@@ -581,8 +581,12 @@ const StockManagement = () => {
       return;
     }
     try {
+      const product = products.find((p) => p.pid === pid);
+      const updated = applyTodayPriceToProduct(product, priceNum);
+
       const formData = new FormData();
       formData.append('current_price', String(priceNum));
+      formData.append('price_date', JSON.stringify(updated.price_date));
       await updateProduct(pid, formData);
 
       setEditingPriceId(null);
@@ -591,7 +595,7 @@ const StockManagement = () => {
       setTimeout(() => setMarketPriceSavedPid(null), 2500);
 
       setProducts((prev) =>
-        prev.map((p) => (p.pid === pid ? applyTodayPriceToProduct(p, priceNum) : p))
+        prev.map((p) => (p.pid === pid ? updated : p))
       );
 
       const response = await getAllProducts(1, 1000);
