@@ -69,9 +69,12 @@ export const getDriverStats = async () => {
 // Get present drivers today (or on a specific date)
 export const getPresentDriversToday = async (date) => {
   try {
-    const params = date ? `?date=${date}` : '';
-    const response = await api.get(`/driver-attendance/present-today${params}`);
-    return response.data;
+    const params = new URLSearchParams({ status: 'Present' });
+    if (date) params.set('date', date);
+    const response = await api.get(`/driver-attendance/overview?${params}`);
+    // overview returns { data: { drivers: [...] } } — normalise to { data: [...{ driver }] }
+    const drivers = response.data?.data?.drivers || [];
+    return { ...response.data, data: drivers.map(d => ({ driver: d })) };
   } catch (error) {
     throw error.response?.data || error.message;
   }
