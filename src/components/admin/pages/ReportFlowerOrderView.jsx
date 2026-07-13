@@ -509,8 +509,10 @@ const ReportFlowerOrderView = () => {
             pkgBody.push([{ content: 'Shipment Summary', styles: { fontStyle: 'bold', fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }]);
             pkgBody.push(['Total Net Weight', { content: `${pdfNetWeight.toFixed(0)} kg`, colSpan: 3, styles: { halign: 'right' } }]);
             pkgBody.push(['Gross Weight', { content: `${data.totalWeight.toFixed(0)} kg`, colSpan: 3, styles: { halign: 'right' } }]);
-            pkgBody.push(['Shipment Boxes Used', { content: `${count10kg + count5kg + countThermo}`, colSpan: 3, styles: { halign: 'right' } }]);
-            pkgBody.push(['Bags', { content: `${countNetBag}`, colSpan: 3, styles: { halign: 'right' } }]);
+            if (count10kg > 0) pkgBody.push(['10 KG Boxes', { content: `${count10kg}`, colSpan: 3, styles: { halign: 'right' } }]);
+            if (count5kg > 0) pkgBody.push(['05 KG Boxes', { content: `${count5kg}`, colSpan: 3, styles: { halign: 'right' } }]);
+            if (countThermo > 0) pkgBody.push(['Thermo Boxes', { content: `${countThermo}`, colSpan: 3, styles: { halign: 'right' } }]);
+            if (countNetBag > 0) pkgBody.push(['Bags', { content: `${countNetBag}`, colSpan: 3, styles: { halign: 'right' } }]);
             pkgBody.push(['Products Used', { content: `${data.products.length}`, colSpan: 3, styles: { halign: 'right' } }]);
             pkgBody.push([{ content: 'TOTAL EXPENSES:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: totalExpenses.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
             pkgBody.push([{ content: 'VEG TOTAL:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: vegTotal.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
@@ -750,8 +752,10 @@ const ReportFlowerOrderView = () => {
             allRows.push([cell('Shipment Summary', 'sectionGreen'), '', '', '', '', '']); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 5 } }); currentRow++;
             allRows.push([cell('Total Net Weight'), '', '', '', '', cell(`${xlNetWeight.toFixed(0)} kg`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
             allRows.push([cell('Gross Weight'), '', '', '', '', cell(`${data.totalWeight.toFixed(0)} kg`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
-            allRows.push([cell('Shipment Boxes Used'), '', '', '', '', cell(`${count10kg + count5kg + countThermo}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
-            allRows.push([cell('Bags'), '', '', '', '', cell(`${countNetBag}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            if (count10kg > 0) { allRows.push([cell('10 KG Boxes'), '', '', '', '', cell(`${count10kg}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++; }
+            if (count5kg > 0) { allRows.push([cell('05 KG Boxes'), '', '', '', '', cell(`${count5kg}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++; }
+            if (countThermo > 0) { allRows.push([cell('Thermo Boxes'), '', '', '', '', cell(`${countThermo}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++; }
+            if (countNetBag > 0) { allRows.push([cell('Bags'), '', '', '', '', cell(`${countNetBag}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++; }
             allRows.push([cell('Products Used'), '', '', '', '', cell(`${data.products.length}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
 
             allRows.push([cell('TOTAL EXPENSES:', 'highlight'), '', '', '', '', cell(totalExpenses.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
@@ -1837,14 +1841,30 @@ const ReportFlowerOrderView = () => {
                                                                     <td className="p-1 pl-4" colSpan="3">Gross Weight</td>
                                                                     <td className="p-1 text-right pr-2">{grossWeight.toFixed(0)} kg</td>
                                                                 </tr>
-                                                                <tr className="border-b border-gray-200">
-                                                                    <td className="p-1 pl-4" colSpan="3">Shipment Boxes Used</td>
-                                                                    <td className="p-1 text-right pr-2">{count10kg + count5kg + countThermo}</td>
-                                                                </tr>
-                                                                <tr className="border-b border-gray-200">
-                                                                    <td className="p-1 pl-4" colSpan="3">Bags</td>
-                                                                    <td className="p-1 text-right pr-2">{countNetBag}</td>
-                                                                </tr>
+                                                                {count10kg > 0 && (
+                                                                    <tr className="border-b border-gray-200">
+                                                                        <td className="p-1 pl-4" colSpan="3">10 KG Boxes</td>
+                                                                        <td className="p-1 text-right pr-2">{count10kg}</td>
+                                                                    </tr>
+                                                                )}
+                                                                {count5kg > 0 && (
+                                                                    <tr className="border-b border-gray-200">
+                                                                        <td className="p-1 pl-4" colSpan="3">05 KG Boxes</td>
+                                                                        <td className="p-1 text-right pr-2">{count5kg}</td>
+                                                                    </tr>
+                                                                )}
+                                                                {countThermo > 0 && (
+                                                                    <tr className="border-b border-gray-200">
+                                                                        <td className="p-1 pl-4" colSpan="3">Thermo Boxes</td>
+                                                                        <td className="p-1 text-right pr-2">{countThermo}</td>
+                                                                    </tr>
+                                                                )}
+                                                                {countNetBag > 0 && (
+                                                                    <tr className="border-b border-gray-200">
+                                                                        <td className="p-1 pl-4" colSpan="3">Bags</td>
+                                                                        <td className="p-1 text-right pr-2">{countNetBag}</td>
+                                                                    </tr>
+                                                                )}
                                                                 <tr className="border-b border-gray-200">
                                                                     <td className="p-1 pl-4" colSpan="3">Products Used</td>
                                                                     <td className="p-1 text-right pr-2">{data.products.length}</td>

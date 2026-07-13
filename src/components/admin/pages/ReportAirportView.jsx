@@ -309,7 +309,8 @@ const ReportAirportView = () => {
       return {
         dayName, shortDate, airportCode: data.airportCode || `GVT${(index + 1).toString().padStart(3, '0')}`,
         airportName: data.airportName, driverNameWithNum, products: data.products,
-        packagingRows, totalExpenses, vegExpenses, netWeight, grossWeight, totalBoxes: data.totalBoxes,
+        packagingRows, totalExpenses, vegExpenses, netWeight, grossWeight,
+        boxes10kg: count10kg, boxes5kg: count5kg, boxesThermo: countThermo,
         bags: countNetBag, totalProducts: data.products.length, totalExpPerKg
       };
     });
@@ -405,8 +406,10 @@ const ReportAirportView = () => {
       pkgBody.push([{ content: 'Shipment Summary', styles: { fontStyle: 'bold', fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }]);
       pkgBody.push([`Total Net Weight`, `${card.netWeight.toFixed(0)} kg`]);
       pkgBody.push([`Gross Weight`, `${card.grossWeight.toFixed(0)} kg`]);
-      pkgBody.push([`Shipment Boxes Used`, `${card.totalBoxes}`]);
-      pkgBody.push([`Bags`, `${card.bags}`]);
+      if (card.boxes10kg > 0) pkgBody.push([`10 KG Boxes`, `${card.boxes10kg}`]);
+      if (card.boxes5kg > 0) pkgBody.push([`05 KG Boxes`, `${card.boxes5kg}`]);
+      if (card.boxesThermo > 0) pkgBody.push([`Thermo Boxes`, `${card.boxesThermo}`]);
+      if (card.bags > 0) pkgBody.push([`Bags`, `${card.bags}`]);
       pkgBody.push([`Products Used`, `${card.totalProducts}`]);
       pkgBody.push([{ content: `GRAND TOTAL PER KG (NET ${card.netWeight.toFixed(0)}kg):`, colSpan: 1, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: card.totalExpPerKg, styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
 
@@ -572,10 +575,13 @@ const ReportAirportView = () => {
     const summaryFields = [
       (card) => ['Total Net Weight', `${card.netWeight.toFixed(0)} kg`],
       (card) => ['Gross Weight', `${card.grossWeight.toFixed(0)} kg`],
-      (card) => ['Shipment Boxes Used', `${card.totalBoxes}`],
-      (card) => ['Bags', `${card.bags}`],
-      (card) => ['Products Used', `${card.totalProducts}`],
     ];
+    if (stage3Cards.some(c => c.boxes10kg > 0)) summaryFields.push((card) => ['10 KG Boxes', card.boxes10kg > 0 ? `${card.boxes10kg}` : '-']);
+    if (stage3Cards.some(c => c.boxes5kg > 0)) summaryFields.push((card) => ['05 KG Boxes', card.boxes5kg > 0 ? `${card.boxes5kg}` : '-']);
+    if (stage3Cards.some(c => c.boxesThermo > 0)) summaryFields.push((card) => ['Thermo Boxes', card.boxesThermo > 0 ? `${card.boxesThermo}` : '-']);
+    if (stage3Cards.some(c => c.bags > 0)) summaryFields.push((card) => ['Bags', card.bags > 0 ? `${card.bags}` : '-']);
+    summaryFields.push((card) => ['Products Used', `${card.totalProducts}`]);
+
     summaryFields.forEach(fn => {
       const sRow = [];
       stage3Cards.forEach((card, idx) => {
@@ -728,14 +734,30 @@ const ReportAirportView = () => {
                               <td className="p-1 pl-4">Gross Weight</td>
                               <td className="p-1 text-center">{card.grossWeight.toFixed(0)} kg</td>
                             </tr>
-                            <tr className="border-b border-gray-200">
-                              <td className="p-1 pl-4">Shipment Boxes Used</td>
-                              <td className="p-1 text-center">{card.totalBoxes}</td>
-                            </tr>
-                            <tr className="border-b border-gray-200">
-                              <td className="p-1 pl-4">Bags</td>
-                              <td className="p-1 text-center">{card.bags}</td>
-                            </tr>
+                            {card.boxes10kg > 0 && (
+                              <tr className="border-b border-gray-200">
+                                <td className="p-1 pl-4">10 KG Boxes</td>
+                                <td className="p-1 text-center">{card.boxes10kg}</td>
+                              </tr>
+                            )}
+                            {card.boxes5kg > 0 && (
+                              <tr className="border-b border-gray-200">
+                                <td className="p-1 pl-4">05 KG Boxes</td>
+                                <td className="p-1 text-center">{card.boxes5kg}</td>
+                              </tr>
+                            )}
+                            {card.boxesThermo > 0 && (
+                              <tr className="border-b border-gray-200">
+                                <td className="p-1 pl-4">Thermo Boxes</td>
+                                <td className="p-1 text-center">{card.boxesThermo}</td>
+                              </tr>
+                            )}
+                            {card.bags > 0 && (
+                              <tr className="border-b border-gray-200">
+                                <td className="p-1 pl-4">Bags</td>
+                                <td className="p-1 text-center">{card.bags}</td>
+                              </tr>
+                            )}
                             <tr className="border-b border-gray-200">
                               <td className="p-1 pl-4">Products Used</td>
                               <td className="p-1 text-center">{card.totalProducts}</td>
