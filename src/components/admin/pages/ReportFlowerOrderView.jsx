@@ -190,12 +190,13 @@ const ReportFlowerOrderView = () => {
             productsByDriver[driverName].products.push({
                 product: product,
                 grossWeight: grossWeight,
+                netWeight,
                 rate: pricePerKg,
                 amount: productTotal,
                 box: noOfPkgs,
                 ct: item.ct || item.CT,
                 labour: item.labour || item.labourName || stage2LabourMap[product],
-                packingType: item.packingType || item.packing_type || '', // Capture Packing Type
+                packingType: item.packingType || item.packing_type || '',
                 sNo: productsByDriver[driverName].products.length + 1
             });
 
@@ -452,7 +453,7 @@ const ReportFlowerOrderView = () => {
             let _ct = 1;
             const pBody = data.products.map(p => {
                 const n = parseInt(p.box) || 1; const s = _ct; const e = _ct + n - 1; _ct += n;
-                return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), p.grossWeight.toFixed(0), p.rate, p.amount.toFixed(0)];
+                return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), (p.netWeight ?? p.grossWeight).toFixed(0), p.rate, p.amount.toFixed(0)];
             });
 
             doc.autoTable({
@@ -503,6 +504,14 @@ const ReportFlowerOrderView = () => {
             pkgBody.push([{ content: 'PICKUP', colSpan: 3 }, pickupCost]);
             if (tapeCost > 0) pkgBody.push([{ content: 'TAPE & PAPER', colSpan: 3 }, tapeCost]);
             pkgBody.push([{ content: 'DRIVER WAGE', colSpan: 3 }, driverWage]);
+            const pdfTareWeight = (count10kg * 1.5) + (count5kg * 1.0) + (countThermo * 0.5);
+            const pdfNetWeight = data.totalWeight - pdfTareWeight;
+            pkgBody.push([{ content: 'Shipment Summary', styles: { fontStyle: 'bold', fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }]);
+            pkgBody.push(['Total Net Weight', { content: `${pdfNetWeight.toFixed(0)} kg`, colSpan: 3, styles: { halign: 'right' } }]);
+            pkgBody.push(['Gross Weight', { content: `${data.totalWeight.toFixed(0)} kg`, colSpan: 3, styles: { halign: 'right' } }]);
+            pkgBody.push(['Shipment Boxes Used', { content: `${count10kg + count5kg + countThermo}`, colSpan: 3, styles: { halign: 'right' } }]);
+            pkgBody.push(['Bags', { content: `${countNetBag}`, colSpan: 3, styles: { halign: 'right' } }]);
+            pkgBody.push(['Products Used', { content: `${data.products.length}`, colSpan: 3, styles: { halign: 'right' } }]);
             pkgBody.push([{ content: 'TOTAL EXPENSES:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: totalExpenses.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
             pkgBody.push([{ content: 'VEG TOTAL:', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [209, 250, 229] } }, { content: vegTotal.toFixed(0), styles: { fontStyle: 'bold', fillColor: [209, 250, 229] } }]);
             pkgBody.push([{ content: `GRAND TOTAL (${data.totalWeight.toFixed(0)}kg):`, colSpan: 3, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: grandTotalPerKg.toFixed(0), styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
@@ -719,7 +728,7 @@ const ReportFlowerOrderView = () => {
             data.products.forEach(p => {
                 const n = parseInt(p.box) || 1; const s = _xct; const e = _xct + n - 1; _xct += n;
                 const sn = s === e ? `${s}` : `${s}-${e}`;
-                allRows.push([cell(sn), cell(p.box), cell(p.product), cell(p.grossWeight.toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
+                allRows.push([cell(sn), cell(p.box), cell(p.product), cell((p.netWeight ?? p.grossWeight).toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
                 currentRow++;
             });
             allRows.push([]); currentRow++;
@@ -735,6 +744,15 @@ const ReportFlowerOrderView = () => {
             allRows.push([cell('PICKUP'), '', '', cell(pickupCost)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++;
             if (tapeCost > 0) { allRows.push([cell('TAPE & PAPER'), '', '', cell(tapeCost)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++; }
             allRows.push([cell('DRIVER WAGE'), '', '', cell(driverWage)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 2 } }); currentRow++;
+
+            const xlTareWeight = (count10kg * 1.5) + (count5kg * 1.0) + (countThermo * 0.5);
+            const xlNetWeight = data.totalWeight - xlTareWeight;
+            allRows.push([cell('Shipment Summary', 'sectionGreen'), '', '', '', '', '']); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 5 } }); currentRow++;
+            allRows.push([cell('Total Net Weight'), '', '', '', '', cell(`${xlNetWeight.toFixed(0)} kg`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            allRows.push([cell('Gross Weight'), '', '', '', '', cell(`${data.totalWeight.toFixed(0)} kg`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            allRows.push([cell('Shipment Boxes Used'), '', '', '', '', cell(`${count10kg + count5kg + countThermo}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            allRows.push([cell('Bags'), '', '', '', '', cell(`${countNetBag}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
+            allRows.push([cell('Products Used'), '', '', '', '', cell(`${data.products.length}`)]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
 
             allRows.push([cell('TOTAL EXPENSES:', 'highlight'), '', '', '', '', cell(totalExpenses.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
             allRows.push([cell('VEG TOTAL:', 'highlight'), '', '', '', '', cell(vegTotal.toFixed(0), 'highlight')]); merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 4 } }); currentRow++;
@@ -1721,7 +1739,7 @@ const ReportFlowerOrderView = () => {
                                                                     <td className="border-r border-gray-300 p-1 text-center">{sn}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.box}</td>
                                                                     <td className="border-r border-gray-300 p-1 pl-2 font-medium">{p.product}</td>
-                                                                    <td className="border-r border-gray-300 p-1 text-center">{p.grossWeight.toFixed(0)}</td>
+                                                                    <td className="border-r border-gray-300 p-1 text-center">{(p.netWeight ?? p.grossWeight).toFixed(0)}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.rate}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-right pr-2">{p.amount.toFixed(0)}</td>
                                                                 </tr>
@@ -1806,6 +1824,31 @@ const ReportFlowerOrderView = () => {
                                                                         <td className="p-1 text-right pr-2">{fuelExpense.toFixed(2)}</td>
                                                                     </tr>
                                                                 )}
+
+                                                                {/* Shipment Summary */}
+                                                                <tr className="border-t border-gray-400 bg-gray-50">
+                                                                    <td className="p-1 font-bold" colSpan="4">Shipment Summary</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">Total Net Weight</td>
+                                                                    <td className="p-1 text-right pr-2">{netWeight.toFixed(0)} kg</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">Gross Weight</td>
+                                                                    <td className="p-1 text-right pr-2">{grossWeight.toFixed(0)} kg</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">Shipment Boxes Used</td>
+                                                                    <td className="p-1 text-right pr-2">{count10kg + count5kg + countThermo}</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">Bags</td>
+                                                                    <td className="p-1 text-right pr-2">{countNetBag}</td>
+                                                                </tr>
+                                                                <tr className="border-b border-gray-200">
+                                                                    <td className="p-1 pl-4" colSpan="3">Products Used</td>
+                                                                    <td className="p-1 text-right pr-2">{data.products.length}</td>
+                                                                </tr>
 
                                                                 {/* Grand Totals */}
                                                                 <tr className="font-bold bg-gray-100">

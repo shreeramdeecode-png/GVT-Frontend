@@ -232,7 +232,7 @@ const ReportAirportView = () => {
       if (productsByDriver[driverName].airportName === '-') productsByDriver[driverName].airportName = item.airportName || item.airport_name || '-';
 
       productsByDriver[driverName].products.push({
-        product, grossWeight, rate: pricePerKg, amount: productTotal, box: noOfPkgs,
+        product, grossWeight, netWeight, rate: pricePerKg, amount: productTotal, box: noOfPkgs,
         ct: item.ct || item.CT, labour: item.labour || item.labourName || stage2LabourMap[product],
         packingType: item.packingType || item.packing_type || '', sNo: productsByDriver[driverName].products.length + 1
       });
@@ -309,7 +309,8 @@ const ReportAirportView = () => {
       return {
         dayName, shortDate, airportCode: data.airportCode || `GVT${(index + 1).toString().padStart(3, '0')}`,
         airportName: data.airportName, driverNameWithNum, products: data.products,
-        packagingRows, totalExpenses, vegExpenses, netWeight, totalExpPerKg
+        packagingRows, totalExpenses, vegExpenses, netWeight, grossWeight, totalBoxes: data.totalBoxes,
+        bags: countNetBag, totalProducts: data.products.length, totalExpPerKg
       };
     });
   }, [order, assignment, drivers, stockItems, labourRates, driverRates, fuelExpenses]);
@@ -379,7 +380,7 @@ const ReportAirportView = () => {
       let _ct = 1;
       const pBody = card.products.map(p => {
         const n = parseInt(p.box) || 1; const s = _ct; const e = _ct + n - 1; _ct += n;
-        return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), p.grossWeight.toFixed(0)];
+        return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), (p.netWeight ?? p.grossWeight).toFixed(0)];
       });
 
       doc.autoTable({
@@ -401,6 +402,12 @@ const ReportAirportView = () => {
         const displayCount = r.count ?? '';
         pkgBody.push([r.label, displayCount]);
       });
+      pkgBody.push([{ content: 'Shipment Summary', styles: { fontStyle: 'bold', fillColor: [229, 231, 235] } }, { content: '', styles: { fillColor: [229, 231, 235] } }]);
+      pkgBody.push([`Total Net Weight`, `${card.netWeight.toFixed(0)} kg`]);
+      pkgBody.push([`Gross Weight`, `${card.grossWeight.toFixed(0)} kg`]);
+      pkgBody.push([`Shipment Boxes Used`, `${card.totalBoxes}`]);
+      pkgBody.push([`Bags`, `${card.bags}`]);
+      pkgBody.push([`Products Used`, `${card.totalProducts}`]);
       pkgBody.push([{ content: `GRAND TOTAL PER KG (NET ${card.netWeight.toFixed(0)}kg):`, colSpan: 1, styles: { halign: 'right', fontStyle: 'bold', fillColor: [167, 243, 208] } }, { content: card.totalExpPerKg, styles: { fontStyle: 'bold', fillColor: [167, 243, 208] } }]);
 
       doc.autoTable({
@@ -514,7 +521,7 @@ const ReportAirportView = () => {
         const start = CARD_START(idx);
         const p = card.products[r];
         for (let k = 0; k < COLS_PER_CARD; k++) {
-          const val = p ? [_cardRanges[idx][r], p.box, p.product, p.grossWeight][k] : '';
+          const val = p ? [_cardRanges[idx][r], p.box, p.product, (p.netWeight ?? p.grossWeight)][k] : '';
           prodRow[start + k] = cell(val, 'normal', true);
         }
       });
@@ -550,6 +557,37 @@ const ReportAirportView = () => {
       allRows.push(packRow);
       rowIdx++;
     }
+
+    // Shipment Summary rows
+    const summaryHeaderRow = [];
+    stage3Cards.forEach((_, idx) => {
+      const start = CARD_START(idx);
+      summaryHeaderRow[start] = cell('Shipment Summary', 'tableHeader', true);
+      summaryHeaderRow[start + 1] = cell('', 'tableHeader', true);
+      summaryHeaderRow[start + 2] = cell('', 'normal', true);
+      summaryHeaderRow[start + 3] = cell('', 'normal', true);
+    });
+    allRows.push(summaryHeaderRow); rowIdx++;
+
+    const summaryFields = [
+      (card) => ['Total Net Weight', `${card.netWeight.toFixed(0)} kg`],
+      (card) => ['Gross Weight', `${card.grossWeight.toFixed(0)} kg`],
+      (card) => ['Shipment Boxes Used', `${card.totalBoxes}`],
+      (card) => ['Bags', `${card.bags}`],
+      (card) => ['Products Used', `${card.totalProducts}`],
+    ];
+    summaryFields.forEach(fn => {
+      const sRow = [];
+      stage3Cards.forEach((card, idx) => {
+        const start = CARD_START(idx);
+        const [label, val] = fn(card);
+        sRow[start] = cell(label, 'normal', true);
+        sRow[start + 1] = cell(val, 'normal', true);
+        sRow[start + 2] = cell('', 'normal', true);
+        sRow[start + 3] = cell('', 'normal', true);
+      });
+      allRows.push(sRow); rowIdx++;
+    });
 
     // Grand Total row only (TOTAL EXPENSES and VEG TOTAL removed)
     const r3 = [];
@@ -661,7 +699,7 @@ const ReportAirportView = () => {
                               <td className="border-r border-gray-200 p-1 text-center">{sn}</td>
                               <td className="border-r border-gray-200 p-1 text-center">{p.box}</td>
                               <td className="border-r border-gray-200 p-1 pl-2 font-medium">{p.product}</td>
-                              <td className="border-r border-gray-200 p-1 text-center">{p.grossWeight.toFixed(0)}</td>
+                              <td className="border-r border-gray-200 p-1 text-center">{(p.netWeight ?? p.grossWeight).toFixed(0)}</td>
                             </tr>
                             ); }); })()}
                         </tbody>
@@ -679,6 +717,29 @@ const ReportAirportView = () => {
                                 <td className="p-1 text-center">{row.count ?? ''}</td>
                               </tr>
                             ))}
+                            <tr className="border-t border-gray-400 bg-gray-50">
+                              <td className="p-1 font-bold" colSpan="2">Shipment Summary</td>
+                            </tr>
+                            <tr className="border-b border-gray-200">
+                              <td className="p-1 pl-4">Total Net Weight</td>
+                              <td className="p-1 text-center">{card.netWeight.toFixed(0)} kg</td>
+                            </tr>
+                            <tr className="border-b border-gray-200">
+                              <td className="p-1 pl-4">Gross Weight</td>
+                              <td className="p-1 text-center">{card.grossWeight.toFixed(0)} kg</td>
+                            </tr>
+                            <tr className="border-b border-gray-200">
+                              <td className="p-1 pl-4">Shipment Boxes Used</td>
+                              <td className="p-1 text-center">{card.totalBoxes}</td>
+                            </tr>
+                            <tr className="border-b border-gray-200">
+                              <td className="p-1 pl-4">Bags</td>
+                              <td className="p-1 text-center">{card.bags}</td>
+                            </tr>
+                            <tr className="border-b border-gray-200">
+                              <td className="p-1 pl-4">Products Used</td>
+                              <td className="p-1 text-center">{card.totalProducts}</td>
+                            </tr>
                           </tbody>
                         </table>
                       </div>
