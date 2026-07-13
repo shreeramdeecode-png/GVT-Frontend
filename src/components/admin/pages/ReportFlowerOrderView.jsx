@@ -449,7 +449,11 @@ const ReportFlowerOrderView = () => {
             doc.setFontSize(8);
             doc.text(drvTxt, 190, finalY + 12, { align: 'right' });
 
-            const pBody = data.products.map(p => [p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0), p.rate, p.amount.toFixed(0)]);
+            let _ct = 1;
+            const pBody = data.products.map(p => {
+                const n = parseInt(p.box) || 1; const s = _ct; const e = _ct + n - 1; _ct += n;
+                return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), p.grossWeight.toFixed(0), p.rate, p.amount.toFixed(0)];
+            });
 
             doc.autoTable({
                 startY: finalY + 16,
@@ -711,8 +715,11 @@ const ReportFlowerOrderView = () => {
             allRows.push([]); currentRow++;
 
             allRows.push([cell('S.N', 'header'), cell('Box', 'header'), cell('Product', 'header'), cell('Kgs', 'header'), cell('Rate', 'header'), cell('Amount', 'header')]); currentRow++;
+            let _xct = 1;
             data.products.forEach(p => {
-                allRows.push([cell(p.sNo), cell(p.box), cell(p.product), cell(p.grossWeight.toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
+                const n = parseInt(p.box) || 1; const s = _xct; const e = _xct + n - 1; _xct += n;
+                const sn = s === e ? `${s}` : `${s}-${e}`;
+                allRows.push([cell(sn), cell(p.box), cell(p.product), cell(p.grossWeight.toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
                 currentRow++;
             });
             allRows.push([]); currentRow++;
@@ -1706,16 +1713,19 @@ const ReportFlowerOrderView = () => {
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {data.products.map((p, i) => (
+                                                            {(() => { let _c = 1; return data.products.map((p, i) => {
+                                                                const n = parseInt(p.box) || 1; const s = _c; const e = _c + n - 1; _c += n;
+                                                                const sn = s === e ? `${s}` : `${s}-${e}`;
+                                                                return (
                                                                 <tr key={i} className="border-b border-gray-300">
-                                                                    <td className="border-r border-gray-300 p-1 text-center">{p.sNo}</td>
+                                                                    <td className="border-r border-gray-300 p-1 text-center">{sn}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.box}</td>
                                                                     <td className="border-r border-gray-300 p-1 pl-2 font-medium">{p.product}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.grossWeight.toFixed(0)}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.rate}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-right pr-2">{p.amount.toFixed(0)}</td>
                                                                 </tr>
-                                                            ))}
+                                                                ); }); })()}
 
                                                             {/* Empty Spacer Row if needed */}
                                                             {data.products.length < 3 && <tr className="h-4"><td colSpan="6"></td></tr>}

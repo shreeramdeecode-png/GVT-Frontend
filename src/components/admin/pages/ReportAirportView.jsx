@@ -376,7 +376,11 @@ const ReportAirportView = () => {
       doc.text(cleanText(card.driverNameWithNum), 190, finalY + 12, { align: 'right' });
 
       // Product table - same as Order Report (without Rate/Amount)
-      const pBody = card.products.map(p => [p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0)]);
+      let _ct = 1;
+      const pBody = card.products.map(p => {
+        const n = parseInt(p.box) || 1; const s = _ct; const e = _ct + n - 1; _ct += n;
+        return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), p.grossWeight.toFixed(0)];
+      });
 
       doc.autoTable({
         startY: finalY + 16,
@@ -494,6 +498,15 @@ const ReportAirportView = () => {
     allRows.push(prodHeaderRow);
     rowIdx++;
 
+    // Precompute carton ranges per card
+    const _cardRanges = stage3Cards.map(card => {
+      let ct = 1;
+      return card.products.map(p => {
+        const n = parseInt(p.box) || 1; const s = ct; const e = ct + n - 1; ct += n;
+        return s === e ? `${s}` : `${s}-${e}`;
+      });
+    });
+
     // Product rows (without Rate/Amount)
     for (let r = 0; r < maxProducts; r++) {
       const prodRow = [];
@@ -501,7 +514,7 @@ const ReportAirportView = () => {
         const start = CARD_START(idx);
         const p = card.products[r];
         for (let k = 0; k < COLS_PER_CARD; k++) {
-          const val = p ? [p.sNo, p.box, p.product, p.grossWeight][k] : '';
+          const val = p ? [_cardRanges[idx][r], p.box, p.product, p.grossWeight][k] : '';
           prodRow[start + k] = cell(val, 'normal', true);
         }
       });
@@ -640,14 +653,17 @@ const ReportAirportView = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {card.products.map((p, i) => (
+                          {(() => { let _c = 1; return card.products.map((p, i) => {
+                            const n = parseInt(p.box) || 1; const s = _c; const e = _c + n - 1; _c += n;
+                            const sn = s === e ? `${s}` : `${s}-${e}`;
+                            return (
                             <tr key={i} className="border-b border-gray-200">
-                              <td className="border-r border-gray-200 p-1 text-center">{p.sNo}</td>
+                              <td className="border-r border-gray-200 p-1 text-center">{sn}</td>
                               <td className="border-r border-gray-200 p-1 text-center">{p.box}</td>
                               <td className="border-r border-gray-200 p-1 pl-2 font-medium">{p.product}</td>
                               <td className="border-r border-gray-200 p-1 text-center">{p.grossWeight.toFixed(0)}</td>
                             </tr>
-                          ))}
+                            ); }); })()}
                         </tbody>
                       </table>
                       <div className="border-t border-gray-300 p-2">
