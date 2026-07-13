@@ -66,10 +66,11 @@ export const getDriverStats = async () => {
   }
 };
 
-// Get present drivers today
-export const getPresentDriversToday = async () => {
+// Get present drivers today (or on a specific date)
+export const getPresentDriversToday = async (date) => {
   try {
-    const response = await api.get('/driver-attendance/present-today');
+    const params = date ? `?date=${date}` : '';
+    const response = await api.get(`/driver-attendance/present-today${params}`);
     return response.data;
   } catch (error) {
     throw error.response?.data || error.message;

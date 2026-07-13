@@ -861,7 +861,7 @@ const ReportOrderView = () => {
             doc.setFontSize(8);
             doc.text(drvTxt, 190, finalY + 12, { align: 'right' });
 
-            const pBody = data.products.map(p => [p.ct || p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0), p.rate, p.amount.toFixed(0)]);
+            const pBody = data.products.map(p => [p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0), p.rate, p.amount.toFixed(0)]);
 
             doc.autoTable({
                 startY: finalY + 16,
@@ -1129,7 +1129,7 @@ const ReportOrderView = () => {
 
             allRows.push([cell('S.N', 'header'), cell('Box', 'header'), cell('Product', 'header'), cell('Kgs', 'header'), cell('Rate', 'header'), cell('Amount', 'header')]); currentRow++;
             data.products.forEach(p => {
-                allRows.push([cell(p.ct || p.sNo), cell(p.box), cell(p.product), cell(p.grossWeight.toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
+                allRows.push([cell(p.sNo), cell(p.box), cell(p.product), cell(p.grossWeight.toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
                 currentRow++;
             });
             allRows.push([]); currentRow++;
@@ -1965,7 +1965,7 @@ const ReportOrderView = () => {
                                                         <tbody>
                                                             {data.products.map((p, i) => (
                                                                 <tr key={i} className="border-b border-gray-300">
-                                                                    <td className="border-r border-gray-300 p-1 text-center">{p.ct || p.sNo}</td>
+                                                                    <td className="border-r border-gray-300 p-1 text-center">{p.sNo}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.box}</td>
                                                                     <td className="border-r border-gray-300 p-1 pl-2 font-medium">{p.product}</td>
                                                                     <td className="border-r border-gray-300 p-1 text-center">{p.grossWeight.toFixed(0)}</td>

@@ -51,8 +51,8 @@ const LabourAttendance = () => {
     fetchData();
   }, [selectedDate, filters]);
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const attendanceRes = await getAllAttendance({ date: selectedDate, status: filters.status });
 
@@ -74,7 +74,7 @@ const LabourAttendance = () => {
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -104,7 +104,7 @@ const LabourAttendance = () => {
       } else if (action === 'markAbsent') {
         await markAbsent(labourId, { date: selectedDate, type: absenceType || 'normal absent' });
       }
-      await fetchData();
+      await fetchData(true);
     } catch (error) {
       console.error('Error marking attendance:', error);
       alert('Failed to mark attendance. Please try again.');
@@ -138,7 +138,7 @@ const LabourAttendance = () => {
       } else {
         await updateCheckInTime(labourId, { date: selectedDate, time });
       }
-      await fetchData();
+      await fetchData(true);
     } catch (err) {
       console.error('Error saving check-in time:', err);
       alert('Failed to save check-in time. Please try again.');
@@ -154,7 +154,7 @@ const LabourAttendance = () => {
       } else if (labour?.checkOut) {
         await updateCheckOutTime(labourId, { date: selectedDate, time });
       }
-      await fetchData();
+      await fetchData(true);
     } catch (err) {
       console.error('Error saving check-out time:', err);
       alert('Failed to save check-out time. Please try again.');

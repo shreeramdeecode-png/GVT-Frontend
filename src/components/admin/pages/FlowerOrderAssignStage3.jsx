@@ -135,8 +135,11 @@ const FlowerOrderAssignStage3 = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
+        const rawDate = orderData?.order_received_date || orderData?.createdAt;
+        const orderDate = rawDate ? new Date(rawDate).toISOString().split('T')[0] : undefined;
+
         const [driversResponse, airportsResponse, tapesResponse] = await Promise.all([
-          getPresentDriversToday(),
+          getPresentDriversToday(orderDate),
           getAllAirports(),
           (async () => {
             const { getTapes } = await import('../../../api/inventoryApi');

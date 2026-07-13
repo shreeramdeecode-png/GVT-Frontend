@@ -376,7 +376,7 @@ const ReportAirportView = () => {
       doc.text(cleanText(card.driverNameWithNum), 190, finalY + 12, { align: 'right' });
 
       // Product table - same as Order Report (without Rate/Amount)
-      const pBody = card.products.map(p => [p.ct || p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0)]);
+      const pBody = card.products.map(p => [p.sNo, p.box, cleanText(p.product), p.grossWeight.toFixed(0)]);
 
       doc.autoTable({
         startY: finalY + 16,
@@ -501,7 +501,7 @@ const ReportAirportView = () => {
         const start = CARD_START(idx);
         const p = card.products[r];
         for (let k = 0; k < COLS_PER_CARD; k++) {
-          const val = p ? [p.ct || p.sNo, p.box, p.product, p.grossWeight][k] : '';
+          const val = p ? [p.sNo, p.box, p.product, p.grossWeight][k] : '';
           prodRow[start + k] = cell(val, 'normal', true);
         }
       });
@@ -642,7 +642,7 @@ const ReportAirportView = () => {
                         <tbody>
                           {card.products.map((p, i) => (
                             <tr key={i} className="border-b border-gray-200">
-                              <td className="border-r border-gray-200 p-1 text-center">{p.ct || p.sNo}</td>
+                              <td className="border-r border-gray-200 p-1 text-center">{p.sNo}</td>
                               <td className="border-r border-gray-200 p-1 text-center">{p.box}</td>
                               <td className="border-r border-gray-200 p-1 pl-2 font-medium">{p.product}</td>
                               <td className="border-r border-gray-200 p-1 text-center">{p.grossWeight.toFixed(0)}</td>

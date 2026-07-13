@@ -344,12 +344,15 @@ const FlowerOrderAssignStage1 = () => {
           }
         }
 
+        const rawDate = orderData?.order_received_date || orderData?.createdAt;
+        const orderDate = rawDate ? new Date(rawDate).toISOString().split('T')[0] : undefined;
+
         const [farmersRes, suppliersRes, thirdPartiesRes, laboursRes, driversRes, productsRes, productCountsRes] = await Promise.all([
           getAllFarmers(),
           getAllSuppliers(),
           getAllThirdParties(),
-          getPresentLaboursToday(),
-          getPresentDriversToday(),
+          getPresentLaboursToday(orderDate),
+          getPresentDriversToday(orderDate),
           getAllProducts(1, 1000),
           getAllProductCounts(1, 1000, '').catch(() => ({ data: [] }))
         ]);

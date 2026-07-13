@@ -74,9 +74,9 @@ const DriveAttendance = () => {
     return () => clearInterval(interval);
   }, [filters, attendanceDate]);
 
-  const fetchAttendanceData = async () => {
+  const fetchAttendanceData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const params = {
         date: attendanceDate,
         status: filters.status !== 'All' ? filters.status : undefined,
@@ -149,7 +149,7 @@ const DriveAttendance = () => {
     } catch (error) {
       console.error('Error fetching attendance data:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -179,7 +179,7 @@ const DriveAttendance = () => {
       } else if (action === 'markAbsent') {
         await markAbsent(driverId, { date: attendanceDate, type: absenceType || 'normal absent' });
       }
-      await fetchAttendanceData();
+      await fetchAttendanceData(true);
     } catch (error) {
       console.error('Error marking attendance:', error);
       alert('Failed to mark attendance. Please try again.');
@@ -212,7 +212,7 @@ const DriveAttendance = () => {
       } else {
         await updateCheckInTime(driverId, { date: attendanceDate, time });
       }
-      await fetchAttendanceData();
+      await fetchAttendanceData(true);
     } catch (err) {
       console.error('Error saving check-in time:', err);
       alert('Failed to save check-in time. Please try again.');
@@ -228,7 +228,7 @@ const DriveAttendance = () => {
       } else if (driver?.checkOut) {
         await updateCheckOutTime(driverId, { date: attendanceDate, time });
       }
-      await fetchAttendanceData();
+      await fetchAttendanceData(true);
     } catch (err) {
       console.error('Error saving check-out time:', err);
       alert('Failed to save check-out time. Please try again.');

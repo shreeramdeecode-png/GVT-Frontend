@@ -229,8 +229,9 @@ const FlowerOrderAssignStage2 = () => {
 
         // Load present labours from attendance
         try {
-          const today = new Date().toISOString().split('T')[0];
-          const attendanceResponse = await getPresentLaboursToday(today);
+          const rawDate = orderData?.order_received_date || orderData?.createdAt;
+          const orderDate = rawDate ? new Date(rawDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+          const attendanceResponse = await getPresentLaboursToday(orderDate);
 
           // Handle different response structures
           let allAttendance = [];
