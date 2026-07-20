@@ -380,8 +380,10 @@ const ReportAirportView = () => {
       // Product table - same as Order Report (without Rate/Amount)
       let _ct = 1;
       const pBody = card.products.map(p => {
-        const n = parseInt(p.box) || 1; const s = _ct; const e = _ct + n - 1; _ct += n;
-        return [s === e ? `${s}` : `${s}-${e}`, p.box, cleanText(p.product), (p.netWeight ?? p.grossWeight).toFixed(0)];
+        const n = parseInt(p.box) || 0;
+        const sn = n === 0 ? '-' : (n === 1 ? `${_ct}` : `${_ct}-${_ct + n - 1}`);
+        if (n > 0) _ct += n;
+        return [sn, p.box, cleanText(p.product), (p.netWeight ?? p.grossWeight).toFixed(0)];
       });
 
       doc.autoTable({
@@ -512,8 +514,10 @@ const ReportAirportView = () => {
     const _cardRanges = stage3Cards.map(card => {
       let ct = 1;
       return card.products.map(p => {
-        const n = parseInt(p.box) || 1; const s = ct; const e = ct + n - 1; ct += n;
-        return s === e ? `${s}` : `${s}-${e}`;
+        const n = parseInt(p.box) || 0;
+        const sn = n === 0 ? '-' : (n === 1 ? `${ct}` : `${ct}-${ct + n - 1}`);
+        if (n > 0) ct += n;
+        return sn;
       });
     });
 
@@ -698,8 +702,9 @@ const ReportAirportView = () => {
                         </thead>
                         <tbody>
                           {(() => { let _c = 1; return card.products.map((p, i) => {
-                            const n = parseInt(p.box) || 1; const s = _c; const e = _c + n - 1; _c += n;
-                            const sn = s === e ? `${s}` : `${s}-${e}`;
+                            const n = parseInt(p.box) || 0;
+                            const sn = n === 0 ? '-' : (n === 1 ? `${_c}` : `${_c}-${_c + n - 1}`);
+                            if (n > 0) _c += n;
                             return (
                             <tr key={i} className="border-b border-gray-200">
                               <td className="border-r border-gray-200 p-1 text-center">{sn}</td>

@@ -863,9 +863,9 @@ const ReportOrderView = () => {
 
             let _ct = 1;
             const pBody = data.products.map(p => {
-                const n = parseInt(p.box) || 1;
-                const s = _ct; const e = _ct + n - 1; _ct += n;
-                const sn = s === e ? `${s}` : `${s}-${e}`;
+                const n = parseInt(p.box) || 0;
+                const sn = n === 0 ? '-' : (n === 1 ? `${_ct}` : `${_ct}-${_ct + n - 1}`);
+                if (n > 0) _ct += n;
                 return [sn, p.box, cleanText(p.product), (p.netWeight ?? p.grossWeight).toFixed(0), p.rate, p.amount.toFixed(0)];
             });
 
@@ -1144,9 +1144,9 @@ const ReportOrderView = () => {
             allRows.push([cell('S.N', 'header'), cell('Box', 'header'), cell('Product', 'header'), cell('Kgs', 'header'), cell('Rate', 'header'), cell('Amount', 'header')]); currentRow++;
             let _xct = 1;
             data.products.forEach(p => {
-                const n = parseInt(p.box) || 1;
-                const s = _xct; const e = _xct + n - 1; _xct += n;
-                const sn = s === e ? `${s}` : `${s}-${e}`;
+                const n = parseInt(p.box) || 0;
+                const sn = n === 0 ? '-' : (n === 1 ? `${_xct}` : `${_xct}-${_xct + n - 1}`);
+                if (n > 0) _xct += n;
                 allRows.push([cell(sn), cell(p.box), cell(p.product), cell((p.netWeight ?? p.grossWeight).toFixed(0)), cell(p.rate), cell(p.amount.toFixed(0))]);
                 currentRow++;
             });
@@ -1991,8 +1991,9 @@ const ReportOrderView = () => {
                                                         </thead>
                                                         <tbody>
                                                             {(() => { let _c = 1; return data.products.map((p, i) => {
-                                                                const n = parseInt(p.box) || 1; const s = _c; const e = _c + n - 1; _c += n;
-                                                                const sn = s === e ? `${s}` : `${s}-${e}`;
+                                                                const n = parseInt(p.box) || 0;
+                                                                const sn = n === 0 ? '-' : (n === 1 ? `${_c}` : `${_c}-${_c + n - 1}`);
+                                                                if (n > 0) _c += n;
                                                                 return (
                                                                 <tr key={i} className="border-b border-gray-300">
                                                                     <td className="border-r border-gray-300 p-1 text-center">{sn}</td>
