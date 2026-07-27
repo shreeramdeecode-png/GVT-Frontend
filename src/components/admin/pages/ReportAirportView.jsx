@@ -229,7 +229,9 @@ const ReportAirportView = () => {
       const lineNet = parseFloat(orderItemForNet?.net_weight ?? orderItemForNet?.netWeight) || 0;
       const lineBoxes = parseNumBoxesLocal(orderItemForNet?.num_boxes ?? orderItemForNet?.numBoxes);
       const noOfPkgsForNet = parseInt(item.noOfPkgs || item.no_of_pkgs || 0) || 0;
-      const fallbackNetWeight = lineNet > 0 && lineBoxes > 0 ? (lineNet * noOfPkgsForNet) / lineBoxes : grossWeight;
+      const fallbackNetWeight = lineNet > 0 && lineBoxes > 0 && noOfPkgsForNet > 0
+        ? (lineNet * noOfPkgsForNet) / lineBoxes
+        : grossWeight;
       const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : fallbackNetWeight;
       const productTotal = pricePerKg * netWeight;
       const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0) || 0;
@@ -277,7 +279,7 @@ const ReportAirportView = () => {
       let count10kg = 0, count5kg = 0, countThermo = 0, countNetBag = 0;
       data.products.forEach(p => {
         const lower = (p.product || '').toLowerCase(), lowerType = (p.packingType || '').toLowerCase(), q = p.box || 0;
-        if (lowerType.includes('5kg') || lower.includes('5kg')) count5kg += q;
+        if (lowerType.includes('5kg') || lowerType.includes('5 kg') || lower.includes('5kg') || lower.includes('5 kg')) count5kg += q;
         else if (lowerType.includes('thermo') || lower.includes('thermo')) countThermo += q;
         else if (lowerType.includes('bag') || lower.includes('bag')) countNetBag += q;
         else count10kg += q;
