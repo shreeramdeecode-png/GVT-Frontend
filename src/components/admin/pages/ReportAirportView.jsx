@@ -225,16 +225,23 @@ const ReportAirportView = () => {
       }
       const stage4Product = stage4ProductRows.find(p4 => (p4.product_name || p4.product || p4.productName) === product);
       const pricePerKg = stage4Product ? parseFloat(stage4Product.price || stage4Product.final_price || 0) : 0;
-      const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : grossWeight;
+      const orderItemForNet = orderItemsByOiid[item.oiid];
+      const lineNet = parseFloat(orderItemForNet?.net_weight ?? orderItemForNet?.netWeight) || 0;
+      const lineBoxes = parseNumBoxesLocal(orderItemForNet?.num_boxes ?? orderItemForNet?.numBoxes);
+      const noOfPkgsForNet = parseInt(item.noOfPkgs || item.no_of_pkgs || 0) || 0;
+      const fallbackNetWeight = lineNet > 0 && lineBoxes > 0 ? (lineNet * noOfPkgsForNet) / lineBoxes : grossWeight;
+      const netWeight = stage4Product ? parseFloat(stage4Product.net_weight || stage4Product.quantity || 0) : fallbackNetWeight;
       const productTotal = pricePerKg * netWeight;
       const noOfPkgs = parseInt(item.noOfPkgs || item.no_of_pkgs || 0) || 0;
 
       if (productsByDriver[driverName].airportName === '-') productsByDriver[driverName].airportName = item.airportName || item.airport_name || '-';
 
+      const orderItem = orderItemsByOiid[item.oiid];
+      const packingType = item.packingType || item.packing_type || orderItem?.packing_type || '';
       productsByDriver[driverName].products.push({
         product, grossWeight, netWeight, rate: pricePerKg, amount: productTotal, box: noOfPkgs,
         ct: item.ct || item.CT, labour: item.labour || item.labourName || stage2LabourMap[product],
-        packingType: item.packingType || item.packing_type || '', sNo: productsByDriver[driverName].products.length + 1
+        packingType, sNo: productsByDriver[driverName].products.length + 1
       });
       productsByDriver[driverName].totalAmount += productTotal;
       productsByDriver[driverName].totalWeight += grossWeight;

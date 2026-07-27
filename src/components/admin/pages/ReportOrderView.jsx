@@ -209,6 +209,8 @@ export function buildStage3GvtReportCards({
         ? summaryAirportGroups
         : {};
     const gvtCodeByRowId = buildGvtCodeByRowId(deliveryData, customerName);
+    const orderItemsByOiid = {};
+    (order?.items || []).forEach(oi => { if (oi.oiid != null) orderItemsByOiid[oi.oiid] = oi; });
 
     getGvtDeliveryRows(deliveryData).forEach((item, index) => {
         const product = item.product || item.productName || '-';
@@ -244,7 +246,7 @@ export function buildStage3GvtReportCards({
             box: noOfPkgs,
             ct: item.ct || item.CT,
             labour: item.labour || item.labourName || stage2LabourMap[product],
-            packingType: item.packingType || item.packing_type || '',
+            packingType: item.packingType || item.packing_type || orderItemsByOiid[item.oiid]?.packing_type || '',
             sNo: (productsByGvt[airportCode]?.products?.length || 0) + 1,
         };
 

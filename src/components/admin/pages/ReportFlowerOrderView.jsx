@@ -130,6 +130,9 @@ const ReportFlowerOrderView = () => {
             }
         }
 
+        const orderItemsByOiid = {};
+        (order?.items || []).forEach(oi => { if (oi.oiid != null) orderItemsByOiid[oi.oiid] = oi; });
+
         let productsByDriver = {};
 
         deliveryData.forEach((item) => {
@@ -196,7 +199,7 @@ const ReportFlowerOrderView = () => {
                 box: noOfPkgs,
                 ct: item.ct || item.CT,
                 labour: item.labour || item.labourName || stage2LabourMap[product],
-                packingType: item.packingType || item.packing_type || '',
+                packingType: item.packingType || item.packing_type || orderItemsByOiid[item.oiid]?.packing_type || '',
                 sNo: productsByDriver[driverName].products.length + 1
             });
 
@@ -1323,6 +1326,8 @@ const ReportFlowerOrderView = () => {
                                         let stage3Data = typeof assignment.stage3_data === 'string' ? JSON.parse(assignment.stage3_data) : assignment.stage3_data;
                                         let deliveryData = stage3Data.products || [];
                                         const airportGroups = stage3Data.summaryData?.airportGroups || {};
+                                        const orderItemsByOiidHtml = {};
+                                        (order?.items || []).forEach(oi => { if (oi.oiid != null) orderItemsByOiidHtml[oi.oiid] = oi; });
                                         // Prefer stage3_summary_data.airportGroups (backend may save codes there)
                                         let summaryAirportGroupsHtml = airportGroups;
                                         if (assignment.stage3_summary_data) {
@@ -1507,7 +1512,7 @@ const ReportFlowerOrderView = () => {
                                                 box: noOfPkgs,
                                                 ct: item.ct || item.CT,
                                                 labour: item.labour || item.labourName || stage2LabourMap[product],
-                                                packingType: item.packingType || item.packing_type || '', // Capture Packing Type
+                                                packingType: item.packingType || item.packing_type || orderItemsByOiidHtml[item.oiid]?.packing_type || '',
                                                 sNo: productsByDriver[driverName].products.length + 1
                                             });
 
